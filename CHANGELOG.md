@@ -2,6 +2,60 @@
 
 > English release notes (for the CurseForge / Modrinth changelog field): [`CHANGELOG.en.md`](CHANGELOG.en.md)
 
+## 1.4.1 — 2026-11-16
+
+**修复：重新加载世界后，车厢之间的连杆全部断掉（而且不可恢复）**
+
+现象：载入存档（或让车厢重新加载）几秒后，整条列车之间的耦合全断，日志刷出一大串
+`[cart-link] unlinked`；`coupler snapped`（张力拉断）**一条都没有**——所以不是物理扯断的。
+更糟的是它**永久**：`unlinkPair` 会调 `CoasterCartTrainLinkData.removeLink`，把记录从车厢的
+持久化 NBT 里删掉，重启世界也回不来。
+
+证据（本机日志全量统计，`unlinked` / `restored link`）：
+
+| 版本 | 会话 | unlinked | restored |
+|---|---|---|---|
+| 1.0.1 | 11-15 ×6 | 0 | 0 |
+| **1.2.0** | 11-16 19:43 | **11**（载入后 6 秒一整批） | 0 |
+| 1.3.0 | 11-16 | 108（伴随 33 次 restore、78 次 link、6 次 snap） | 33 |
+| 1.4.0 | 11-16 白天 | 1（同场新建了 80 条连杆） | 0 |
+| 1.4.0 | 11-16 夜间 | **78（载入后一整批）** | **0** |
+
+`unlinked` 只在 **1.1.0 引入扫描 TTL 之后**出现，且都发生在**载入后几秒**——1.0.1 的六个会话一条都没有。
+
+原因链：`restorePersistedLinks` → `pruneDefunctLinks` / `tryRestoreLink` →
+`isDefunctLinkPartner(level, partnerId)` → `CoasterCartResolve.isCartSubLevel` →
+`CoasterCartBearingTickCache.scan`。上游这个扫描是**每 tick 重算**的；1.1.0 把它换成了
+40 / 100 刻的 TTL。载入世界时 sublevel 已经在容器里、它的 plot 还没填充完（或者缓存里正躺着
+上一次那条「无轴承格」），于是 `isCartSubLevel` 对**一节还没加载好的车**返回 `false`。
+上游把这个 `false` 读成「这节车已经没了」，直接删耦合。
+
+上游自己不出事，是因为它下一 tick 就重扫、答案立刻恢复；我们把「看不见」延长成了 2–5 秒，
+足够它在恢复之前把整列车删干净。
+
+修法（两条互相独立，任一单独生效都能挡住这条链）：
+
+1. **删除前重新裁决**（新增 `CartLinkGuardMixin`，挂 `isDefunctLinkPartner` 与 `onCartRemoved`）：
+   真要删之前用 `CartMembership` **绕开缓存**重算一次成员资格。判定为 `CART`（新扫描找到了轴承格）
+   或 `UNKNOWN`（plot 里连一个方块都没有 = 数据还没到）→ **拒绝删除**；只有「plot 有内容、确实
+   没有轴承格」才按上游语义删。真正被移除的车（`isRemoved()`）不受影响，照旧清理。
+2. **负结果不进缓存**：`plot` 连一个 chunk 对象都拿不出来时，「没有轴承格」这个答案不缓存——
+   那正是载入窗口，缓存它等于把「还没加载」写成「不存在」。
+
+开销：guard 只活在本**来就要删东西**的路径上；`onCartRemoved` 侧先用一个 NBT key 短路，
+没有连杆的 sublevel 一次扫描都不做，热路径零影响。开关 `protectCartLinks`（默认开）。
+
+- 拒绝删除时留日志，方便下次考古：
+  `[simcoastersfix] kept cart-train couplings of <uuid> at isDefunctLinkPartner (...)`。
+- 自检 11 → **12** 项。
+
+**已知边界**
+
+- **上一次载入时已经被删掉的连杆找不回来**：NBT 里已经没有了。用世界备份回滚到出问题之前，
+  或者手动重连一次；修好的版本只保证「不会再删」。
+- `pruneInvalidLinksForCoupling`（玩家主动连车时那条支路）仍读缓存，本次未加 guard——它只在
+  玩家插车厢时跑，触发面比每 tick 的 `restorePersistedLinks` 小得多。
+
 ## 1.4.0 — 2026-11-16
 
 **新增：贝塞尔曲线手柄长度缓存（'车在轨道上比不在轨道上贵几倍'的元凶）**

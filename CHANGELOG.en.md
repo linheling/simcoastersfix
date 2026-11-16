@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.4.1 — 2026-11-16
+
+**Fixed: every cart-to-cart coupling in a train was erased a few seconds after a world load — permanently**
+
+Symptom: after loading a save (or otherwise reloading the carts), the whole train came apart and the log filled with `[cart-link] unlinked` lines. There were **zero** `coupler snapped` lines, so physics did not break them. Worse, it is permanent: `unlinkPair` calls `CoasterCartTrainLinkData.removeLink`, which deletes the record from the cart's persisted NBT, so a restart does not bring it back.
+
+Evidence (full log sweep on the reporting machine — `unlinked` / `restored link`):
+
+| Version | Session | unlinked | restored |
+|---|---|---|---|
+| 1.0.1 | 11-15 ×6 | 0 | 0 |
+| **1.2.0** | 11-16 19:43 | **11** (one burst 6 s after load) | 0 |
+| 1.3.0 | 11-16 | 108 (with 33 restores, 78 new links, 6 snaps) | 33 |
+| 1.4.0 | 11-16 daytime | 1 (80 links created that session) | 0 |
+| 1.4.0 | 11-16 evening | **78 (one burst on load)** | **0** |
+
+`unlinked` first appears **after 1.1.0 added the scan TTL**, and every burst is a few seconds after a load; the six 1.0.1 sessions have none at all.
+
+The chain: `restorePersistedLinks` → `pruneDefunctLinks` / `tryRestoreLink` → `isDefunctLinkPartner(level, partnerId)` → `CoasterCartResolve.isCartSubLevel` → `CoasterCartBearingTickCache.scan`. Upstream re-scans that on **every tick**; 1.1.0 replaced it with a 40 / 100-tick TTL. During a world load the sub-level is already in the container while its plot is not populated yet (or the cache still holds the previous "no bearing cell" answer), so `isCartSubLevel` returns `false` for a cart that is merely **not observable yet**. Upstream reads that `false` as "this cart is gone" and deletes the coupling.
+
+Upstream gets away with it because the next tick rescans and the answer recovers immediately; the TTL stretched "not observable" into 2–5 seconds, which is long enough to delete the entire train first.
+
+Fix (two independent layers, either one breaks the chain):
+
+1. **Re-adjudicate before destroying** (new `CartLinkGuardMixin`, hooked into `isDefunctLinkPartner` and `onCartRemoved`): before anything is deleted, `CartMembership` recomputes membership **bypassing the cache**. A verdict of `CART` (the fresh scan finds the bearing cell) or `UNKNOWN` (the plot holds no block at all — the data is not here yet) **refuses the deletion**; only "the plot is populated and genuinely holds no bearing cell" unlinks, exactly as upstream intends. Genuinely removed carts (`isRemoved()`) are unaffected and still cleaned up.
+2. **Negative answers are not cached** when the plot has no chunk object at all — that is precisely the load window, and caching it writes "not loaded yet" down as "does not exist".
+
+Cost: the guard only runs on paths that were **about to delete something**, and the `onCartRemoved` side short-circuits on a single NBT key, so sub-levels without couplings are never rescanned. The hot path is untouched. Switch `protectCartLinks` (on by default).
+
+- A refusal is logged so the next investigation starts with facts:
+  `[simcoastersfix] kept cart-train couplings of <uuid> at isDefunctLinkPartner (...)`.
+- Self-check 11 → **12** items.
+
+**Known limitations**
+
+- **Couplings already erased by an earlier load cannot be recovered** — they are gone from the NBT. Roll back to a world backup taken before the incident, or re-link the carts by hand; this build only stops it from happening again.
+- `pruneInvalidLinksForCoupling` (the branch that runs when a player links a cart by hand) still reads the cache and has no guard. It only runs on player interaction, so the exposure is far smaller than the per-tick `restorePersistedLinks` sweep.
+
 ## 1.4.0 — 2026-11-16
 
 **New: bezier curve handle-length cache — the real reason a cart on a track is much more expensive than one off it**

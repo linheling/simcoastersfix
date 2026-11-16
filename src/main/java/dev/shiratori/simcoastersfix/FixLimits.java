@@ -28,6 +28,9 @@ public final class FixLimits {
     /** Cache canonical bezier handle lengths per connection, invalidated by the upstream revision. */
     public static boolean curveHandleLengthCache = true;
 
+    /** Refuse destructive cart-train unlinks when cart membership cannot be observed. */
+    public static boolean protectCartLinks = true;
+
     private FixLimits() {
     }
 }

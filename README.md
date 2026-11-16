@@ -24,10 +24,11 @@ section 级剪枝。客户端可以继续用原版 0.1.5，网络协议没有任
 
 | # | 目标 | 原版 | 本补丁 |
 |---|---|---|---|
-| 1 | `CoasterCartBearingTickCache.scan` | `gameTime == cached.gameTime` → 缓存从不命中，每 tick 整块 plot 扫描 | TTL 缓存：有轴承格 40 刻 / 无轴承格 100 刻 |
+| 1 | `CoasterCartBearingTickCache.scan` | `gameTime == cached.gameTime` → 缓存从不命中，每 tick 整块 plot 扫描 | TTL 缓存：有轴承格 40 刻 / 无轴承格 100 刻；**plot 还没有 chunk 时不缓存负结果**（1.4.1） |
 | 2 | `RivetDisassemblyEnforcer.onPrePhysicsTick` | 每个 sublevel 每 tick 跑 `enforceSingleRivet` + `popIfSelfHosted` | 30 刻 / 20 刻节流 |
 | 3 | `CoasterCartTrackSnap.onPrePhysicsTick` | 非 cart sublevel 每 tick 走 `onCartRemoved`（含 `CoasterCartTrainLinkSync` 发包） | 只在状态跃迁那一次执行 |
 | 4 | `CoasterCartTrainLinkConstraint.maybeRestorePersistedLinks` | 每 tick 全量恢复持久化连杆 | 每 60 刻（3 秒）一次 |
+| 5 | `isDefunctLinkPartner` / `onCartRemoved` | 「成员资格查不到」= 「这节车没了」→ 删掉持久化连杆 | 删之前**绕开缓存**重新裁决，`CART` / `UNKNOWN` 一律不删（1.4.1） |
 
 第 1 项收益最大：`CoasterCartPlotScan.scanBearingCells` 是
 「`plot.getLoadedChunks()` × section × 16×16×16 逐格 `getBlockState`」的三重循环，
@@ -56,6 +57,17 @@ revision 精确失效。A/B 实测：canonical 查找样本 219/328 → **0/0**�
 MSPT p95 14.6 → 11.8 ms。开关 `curveHandleLengthCache`。原理与数据见
 [`OPTIMIZATION.md`](OPTIMIZATION.md) §14。
 
+**1.4.1 修的是 TTL 的副作用，而不是 TTL 本身**：连杆的存亡判定读的是「这节车还在不在」，
+而 1.1.0 把这个判定从「每 tick 重扫」改成了「40/100 刻才重扫」。载入世界时 sublevel 已经在容器里、
+plot 还没填充完，`isCartSubLevel` 就会对一节**还没加载好**的车返回 `false`；上游把这个 `false`
+读成「车没了」，`unlinkPair` 直接把双向记录从车厢 NBT 里删掉——不可恢复。上游自己没事，是因为它
+下一 tick 就重扫、答案立刻恢复；TTL 把「看不见」拉长到 2–5 秒，足够删干净整列车。
+
+两处独立修补：**删除前重新裁决**（`CartLinkGuardMixin` + `CartMembership`：绕开缓存重算，
+`CART` 或 `UNKNOWN` 一律拒绝删除），以及**负结果不进缓存**（plot 连一个 chunk 都没有时，
+「没有轴承格」这个答案不写进缓存）。guard 只走本来就要删东西的路径，热路径零影响；
+开关 `protectCartLinks`。原理、证据表与边界见 [`CHANGELOG.md`](CHANGELOG.md) 1.4.1。
+
 ## 配置
 
 `config/simcoastersfix-server.toml`（首次启动生成）：
@@ -72,6 +84,7 @@ balloonTickMemo                  = true  # 气球 tick 内重复查询去重（1
 balloonPhysicsMemo               = true  # 气球 tick 内物理管线速度读取去重（1.3.0）
 curveHandleLengthCache           = true  # 贝塞尔手柄长度缓存（1.4.0）
 trainLinkTickMemo                = true  # 连杆 tick 内重复查询去重（1.2.0）
+protectCartLinks                 = true  # 成员资格不可观测时拒绝删连杆（1.4.1）
 ```
 
 调大 = 更省 CPU、感知更迟；**任一值设为 1 = 回到原版行为**，可用于 A/B 对照排障。
@@ -80,8 +93,8 @@ trainLinkTickMemo                = true  # 连杆 tick 内重复查询去重（1
 
 Mixin 的注入只有在**目标类被加载**时才校验。类没被加载过，日志里就一片安静——
 「没报错」很容易被误读成「补丁生效了」。所以模组在服务器启动完成时主动强制加载
-五个目标类，逐个检查注入的 `@Unique` 字段是否存在（十一个注入点，`RivetDisassemblyEnforcer` 与
-`CoasterCartTrainLinkConstraint` 各占两项，`BalloonTetherController` 占三项）：
+五个目标类，逐个检查注入的 `@Unique` 字段是否存在（十二个注入点，`RivetDisassemblyEnforcer`、
+`CoasterCartTrainLinkConstraint` 各占三项，`BalloonTetherController` 占三项）：
 
 ```
 [simcoastersfix] patch applied to CoasterCartBearingTickCache#simc$scans
@@ -94,8 +107,9 @@ Mixin 的注入只有在**目标类被加载**时才校验。类没被加载过�
 [simcoastersfix] patch applied to BalloonTetherController#simc$balloonTickMemo
 [simcoastersfix] patch applied to BalloonTetherController#simc$balloonPhysicsMemo
 [simcoastersfix] patch applied to CoasterCartTrainLinkConstraint#simc$trainLinkTickMemo
+[simcoastersfix] patch applied to CoasterCartTrainLinkConstraint#simc$cartLinkGuard
 [simcoastersfix] patch applied to CoasterPeerCurveHandleLengths#simc$handleLengths
-[simcoastersfix] self-check OK: 11/11 mixin targets active
+[simcoastersfix] self-check OK: 12/12 mixin targets active
 ```
 
 看到 `self-check FAILED` 说明目标模组版本对不上，注入点没找到——此时
@@ -109,7 +123,7 @@ Mixin 的注入只有在**目标类被加载**时才校验。类没被加载过�
 等稳定 API）。
 
 ```
-gradlew.bat build          # 产物 build/libs/simcoastersfix-1.4.0.jar
+gradlew.bat build          # 产物 build/libs/simcoastersfix-1.4.1.jar
 gradlew.bat runServer      # 本地 dev 验证（run/mods 需放 create + sable + simulatedcoasters）
 ```
 
@@ -143,6 +157,11 @@ gradlew.bat runServer      # 本地 dev 验证（run/mods 需放 create + sable 
 
 ## 已知边界
 
+- **连杆被删掉不可恢复**：1.4.1 只保证「不会再删」。如果上一次载入已经把某列车的耦合从 NBT 里清掉了，
+  只能回滚世界备份或重新连一次。
+- 1.4.1 的 guard 覆盖 `isDefunctLinkPartner`（`pruneDefunctLinks` / `tryRestoreLink` / 每 tick 的
+  `restorePersistedLinks`）与 `onCartRemoved`（pre-physics 的拆卸路径）；`pruneInvalidLinksForCoupling`
+  ——玩家主动连车时那条支路——仍读缓存，未加 guard。
 - TTL 是**可见延迟**：cart 轴承格变化最坏要等 40 刻（有轴承）/ 100 刻（无轴承）才被感知。
   频繁插拔 cart 的场景可以调小 `bearingScanTtlTicksEmpty`。1.1.0 只降单次扫描成本，没有
   缩短这个延迟——把 `bearingScanTtl*` 设成 `1` 才能回到每 tick 精确扫描的观感。

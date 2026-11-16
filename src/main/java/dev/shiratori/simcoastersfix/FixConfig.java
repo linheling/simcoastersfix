@@ -69,6 +69,16 @@ public final class FixConfig {
                     "Invalidated exactly by the upstream revision counter, which every writer bumps.")
             .define("curveHandleLengthCache", true);
 
+    public static final ModConfigSpec.BooleanValue PROTECT_CART_LINKS = BUILDER
+            .comment("Keep cart-train couplings when a cart is merely unobservable.",
+                    "Upstream deletes a coupling (including the copy in the cart's persisted NBT) whenever the",
+                    "bearing-cell scan comes back empty for the partner. Right after a world load that scan can",
+                    "legitimately come back empty — the sub-level is in the container before its plot is",
+                    "populated — and every coupling in the world is then erased. With this on, such a teardown",
+                    "re-checks membership with a fresh scan and refuses when the answer is 'not observable'.",
+                    "Disable to restore the upstream behaviour.")
+            .define("protectCartLinks", true);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     private FixConfig() {
@@ -85,17 +95,18 @@ public final class FixConfig {
         FixLimits.trainLinkTickMemo = get(TRAIN_LINK_TICK_MEMO, FixLimits.trainLinkTickMemo);
         FixLimits.balloonPhysicsMemo = get(BALLOON_PHYSICS_MEMO, FixLimits.balloonPhysicsMemo);
         FixLimits.curveHandleLengthCache = get(CURVE_HANDLE_LENGTH_CACHE, FixLimits.curveHandleLengthCache);
+        FixLimits.protectCartLinks = get(PROTECT_CART_LINKS, FixLimits.protectCartLinks);
         Simcoastersfix.LOGGER.info(
                 "[{}] limits: bearingTtl(cart/empty)={}/{}, rivet={}, selfHost={}, linkRestore={},"
                         + " balloonRestore={}({}), balloonMemo={}, balloonPhysicsMemo={}, trainLinkMemo={},"
-                        + " curveHandleLengthCache={}",
+                        + " curveHandleLengthCache={}, protectCartLinks={}",
                 Simcoastersfix.MODID,
                 FixLimits.bearingTtlWithCart, FixLimits.bearingTtlEmpty,
                 FixLimits.rivetIntervalTicks, FixLimits.selfHostIntervalTicks,
                 FixLimits.linkRestoreIntervalTicks,
                 FixLimits.balloonRestoreThrottle, FixLimits.balloonRestoreIntervalTicks,
                 FixLimits.balloonTickMemo, FixLimits.balloonPhysicsMemo, FixLimits.trainLinkTickMemo,
-                FixLimits.curveHandleLengthCache);
+                FixLimits.curveHandleLengthCache, FixLimits.protectCartLinks);
     }
     private static int get(ModConfigSpec.IntValue value, int fallback) {
         try {

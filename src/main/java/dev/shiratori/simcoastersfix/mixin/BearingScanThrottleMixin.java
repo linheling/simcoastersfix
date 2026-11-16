@@ -4,6 +4,7 @@ import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.silvergold.simulatedcoasters.track.cart.CoasterCartPlotScan;
 import dev.shiratori.simcoastersfix.FixLimits;
 import dev.shiratori.simcoastersfix.util.CachedScan;
+import dev.shiratori.simcoastersfix.util.CartMembership;
 import java.util.Collections;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -44,6 +45,14 @@ public abstract class BearingScanThrottleMixin {
         ServerLevel level = sub.getLevel();
         CoasterCartPlotScan.BearingScanResult result = cir.getReturnValue();
         if (level == null || result == null) {
+            return;
+        }
+        if (result.bearingCount() == 0 && !CartMembership.plotChunksLoaded(sub)) {
+            // A plot with no chunk object cannot answer "this sub-level carries no cart": the
+            // sub-level is in the container, its plot data is not here yet. Caching that negative
+            // would make the cart look removed for the whole TTL, and the train-link code deletes
+            // the coupling (persisted NBT included) when it sees a cart disappear.
+            simc$scans.remove(sub);
             return;
         }
         long ttl = result.bearingCount() > 0 ? FixLimits.bearingTtlWithCart : FixLimits.bearingTtlEmpty;

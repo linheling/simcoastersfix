@@ -17,6 +17,7 @@ public final class PatchSelfCheck {
             {"dev.silvergold.simulatedcoasters.balloon.BalloonTetherController", "simc$balloonTickMemo"},
             {"dev.silvergold.simulatedcoasters.balloon.BalloonTetherController", "simc$balloonPhysicsMemo"},
             {"dev.silvergold.simulatedcoasters.track.cart.CoasterCartTrainLinkConstraint", "simc$trainLinkTickMemo"},
+            {"dev.silvergold.simulatedcoasters.track.cart.CoasterCartTrainLinkConstraint", "simc$cartLinkGuard"},
             {"dev.silvergold.simulatedcoasters.track.CoasterPeerCurveHandleLengths", "simc$handleLengths"},
     };
 
