@@ -1,0 +1,17 @@
+.gradle/
+build/
+run/
+dist/
+src/generated/
+
+libs/*.jar
+libs/_sable/
+
+.idea/
+*.iml
+hs_err_pid*
+
+*.log
+build_log.txt
+_logo_src.png
+__pycache__/

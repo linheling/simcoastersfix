@@ -1,0 +1,62 @@
+Coaster Perf Fix (Unofficial)
+Copyright (c) 2026 Shiratori Ori
+
+This mod is an independent patch. It is not affiliated with, sponsored by,
+or endorsed by the authors of Create: Coasters Simulated or of Sable.
+
+
+
+ICON ATTRIBUTION
+================
+
+This mod includes a modified version of the icon ("logo.png") taken from
+"Create: Coasters Simulated" by SilverGold (CurseForge account: SilverGoId).
+That project is licensed under the MIT License.
+
+Original project:
+  https://www.curseforge.com/minecraft/mc-mods/create-coasters-simulated
+  https://modrinth.com/mod/create-coasters-simulated
+
+Modification performed: the word "fix" was added to the lower right corner.
+
+
+
+THIRD-PARTY LICENSES
+====================
+
+--- Create: Coasters Simulated ---------------------------------------------
+MIT License
+
+Copyright (c) SilverGold / the Create: Coasters Simulated authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--- Sable --------------------------------------------------------------------
+This mod compiles against and links against Sable at runtime, but does NOT
+redistribute any part of it. Sable is licensed under the PolyForm Shield
+License 1.0.0:
+
+  https://github.com/ryanhcode/sable/blob/main/LICENSE.md
+
+--- Create -------------------------------------------------------------------
+This mod does not include any code or assets from Create. For reference,
+Create licenses its code under MIT and its assets under All Rights Reserved:
+
+  ./src/main/resources/assets/  ->  All Rights Reserved
+  all other files               ->  MIT

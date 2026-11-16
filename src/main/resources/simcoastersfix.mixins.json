@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8.5",
+  "package": "dev.shiratori.simcoastersfix.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "BearingScanThrottleMixin",
+    "RivetScanThrottleMixin",
+    "TrackSnapBroadcastGuardMixin",
+    "TrainLinkRestoreThrottleMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

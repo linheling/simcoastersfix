@@ -1,0 +1,11 @@
+# Normalize line endings on commit so a Windows checkout and a Linux checkout
+# produce the same blob. gradlew must stay LF (it is a shell script), while the
+# .bat wrapper needs CRLF to run correctly in cmd.exe.
+* text=auto eol=lf
+
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+*.jar   binary
+*.png   binary
