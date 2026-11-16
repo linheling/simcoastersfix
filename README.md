@@ -123,6 +123,11 @@ gradlew.bat runServer      # 本地 dev 验证（run/mods 需放 create + sable 
 图标是原模组美术的**修改版**，因此按 MIT 的署名要求，jar 内 `META-INF/NOTICE`
 带有完整归属声明与 MIT 全文。
 
+## 开发文档
+
+- [`BLUEPRINT_COMPAT.md`](BLUEPRINT_COMPAT.md) — 蓝图兼容层的原理与验收日志
+- [`OPTIMIZATION.md`](OPTIMIZATION.md) — 性能分析：热路径数据、调用点谱系、待办优化方案（section 级剪枝）与 JFR 验证方法
+
 ## 许可
 
 本补丁自身：**MIT**（jar 内 `LICENSE`）。
