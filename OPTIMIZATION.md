@@ -10,6 +10,8 @@
 更划算的是治**单次成本**：用 `LevelChunkSection.maybeHas` 把每 section 的 4096 次 `getBlockState` 剪成调色板级判断，**语义等价、不引入延迟**。
 落地后 `bearingScanTtlTicks*` 这两条"可见延迟"边界可以删掉。
 
+> **状态（2026-11-16）**：方案 A 已随 1.1.0 落地并实测（§11）；TTL 退场是下一步（§5 B），尚未做。
+
 ---
 
 ## 1. 版本与材料
@@ -48,7 +50,7 @@ D:\C\MC\mods\_zhwork\mc-src\                # 只抽了 LevelChunkSection / Pale
 | 3 | `CoasterCartTrackSnap.onPrePhysicsTick` | 非 cart sublevel 每 tick 走 `onCartRemoved`（含发包） | 仅状态跃迁执行一次 | — | `simc$teardownDone` |
 | 4 | `CoasterCartTrainLinkConstraint.maybeRestorePersistedLinks` | 每 tick 全量恢复持久化连杆 | 60 刻（3 秒）一次 | `trainLinkRestoreIntervalTicks` | `simc$lastRestore` |
 
-注入技术：`@Inject` HEAD/RETURN + `@WrapOperation`（MixinExtras）。`simcoastersfix.mixins.json` 里 `defaultRequire: 1`——注入点找不到就直接加载失败，不会带病运行；`PatchSelfCheck` 在 `ServerStartedEvent` 强制加载四个目标类，逐个检查 `@Unique` 字段是否存在。
+注入技术：`@Inject` HEAD/RETURN + `@WrapOperation`（MixinExtras）。`simcoastersfix.mixins.json` 里 `defaultRequire: 1`——注入点找不到就直接加载失败，不会带病运行；`PatchSelfCheck` 在 `ServerStartedEvent` 强制加载五个目标类，逐个检查六个 `@Unique` 字段是否存在。
 
 **这四处是对的**，问题在于它们都建立在"扫描原语很贵，所以少调几次"这个前提上，而没去降低单次成本。
 
@@ -103,17 +105,20 @@ record BearingScanResult(@Nullable BlockPos representative, int bearingCount, Li
 ```
 cost(一次扫描) ≈ Σ_{section ∈ loadedChunks} [ hasOnlyAir ? 0 : 4096 × c ]
 c ≈ 1–3 ns（est：数组索引 + palette.valueFor + 分支）
+  实测 20–24 ns/block（热态）、85–130 ns（冷/解释执行）→ 本节 est 偏低约 8 倍，见 §12
 ```
 
 1.21.1 主世界每个区块 24 个 section（−64..320）。
 
-| plot 规模 | 区块 | section 槽位 | 非空气 ≈40% | `getBlockState` 次数 | 单次扫描耗时 `est` |
-|---|---|---|---|---|---|
-| 3×3 | 9 | 216 | 86 | 35.2 万 | 0.4–1.1 ms |
-| 5×5 | 25 | 600 | 240 | 98.3 万 | 1.0–3.0 ms |
-| 11×11 | 121 | 2904 | 1162 | 476 万 | 4.8–14 ms |
+| plot 规模 | 区块 | section 槽位 | 非空气 ≈40% | `getBlockState` 次数 | 原 est（c=1–3ns） | 实测校准（c=21ns） |
+|---|---|---|---|---|---|---|
+| 3×3 | 9 | 216 | 86 | 35.2 万 | 0.4–1.1 ms | **7.4 ms** |
+| 5×5 | 25 | 600 | 240 | 98.3 万 | 1.0–3.0 ms | **20.6 ms** |
+| 11×11 | 121 | 2904 | 1162 | 476 万 | 4.8–14 ms | **100 ms** |
 
-一个世界里几十个 sublevel 时，这些扫描叠加起来就是 TPS 杀手。**注意这是估算**，`c` 的取值和"非空气比例"都随场景变，判据请用 §7 的 JFR 实测。
+一个世界里几十个 sublevel 时，这些扫描叠加起来就是 TPS 杀手。`c` 的实测值来自
+§12 的实测（热态 300+ 次扫描/5s 之后），冷启动会再高 4–6 倍。剩下的不确定性只在
+「非空气比例」，那个随存档变。
 
 ### 3.3 调用点谱系
 
@@ -140,7 +145,7 @@ c ≈ 1–3 ns（est：数组索引 + palette.valueFor + 分支）
 | `CoasterCartTrackSnap::onPrePhysicsTick` | #3 覆盖 |
 | `RivetDisassemblyEnforcer::onPrePhysicsTick` | #2 覆盖 |
 | `RivetCartDragCompensation::onPrePhysicsTick` | ❌ 未覆盖（`isRivetSubLevel` 是 O(1)，成本低） |
-| `BalloonTetherController::onPrePhysicsTick` | ❌ 未覆盖（见 §5 E） |
+| `BalloonTetherController::onPrePhysicsTick` | ✅ 1.2.0 tick 内去重（§13）；悬停射线/向量分配未动 |
 | `CoasterCartTrainLinkConstraint::onPostPhysicsTick` | #4 覆盖 |
 
 外加 `BalloonEvents` / `RivetEvents` / `CoasterPathSubLevelHooks` 三处 `ServerTickEvent.Post`。
@@ -264,7 +269,13 @@ A 成立后 `bearingScanTtl*` 就没必要了。**分两步走**：先只加 A�
 
 ### E. `BalloonTetherController.onPrePhysicsTick`
 
-`BalloonTetherController:110-173` 每 tick 对每个活跃气球：两次 `BalloonResolve.findBalloonById`，外加 `HashMap`、`HashMap`、`HashSet` 三次分配。有气球群时是稳定的 GC 压力。可缓存 host 解析结果，只在 host 变化时重算。收益取决于气球数量，优先级低于 A。
+`BalloonTetherController:110-173` 每 tick 对每个活跃气球：两次 `BalloonResolve.findBalloonById`，外加 `HashMap`、`HashMap`、`HashSet` 三次分配。有气球群时是稳定的 GC 压力。
+
+**1.2.0 已做**：把这次调用内重复的三次解析（`findBalloonById` / `balloonBlockEntity` / `resolveHostSubLevel`，两趟各一次）收进 `TickEvalMemo`，行为等价（见 §13）。
+
+**1.3.0 已做**：物理管线速度读取去重。`applyTetherSpring` 一次取 4 份速度、`dampHostSwing` 再取宿主 2 份、`dampHostVerticalInBand` 再取 1 份——字节码确认 **7 个调用点 / 5 个注入器**。依据是：一次 pre-physics 钩子内力与冲量只入队、步进时才应用，所以同一刚体的速度在这次调用里不变。复用是拷进调用方缓冲区，不是共享实例（别名会变成物理 bug）。开关 `balloonPhysicsMemo`。
+
+**仍没做**：两处 `level.clip()` 悬停射线（4.5 格方块 clip，按 10 个气球估 0.2–0.8 ms/s，收益太小而它直接吃手感）、每气球约 20 个 `Vector3d`/`Quaterniond`（要重写方法体，mixin 做不到安全改写）。这两项要做得先实测手感。
 
 ### F. `BY_SUB` 的 `synchronizedMap`（不要乱动）
 
@@ -280,7 +291,7 @@ A 成立后 `bearingScanTtl*` 就没必要了。**分两步走**：先只加 A�
 2. `src/main/resources/simcoastersfix.mixins.json` 的 `mixins` 数组追加 `"PlotScanSectionFilterMixin"`
 3. `PatchSelfCheck` 的注入没有 `@Unique` 字段可查，建议在 mixin 里加一个 `@Unique` 统计字段（如 `simc$sectionsSkipped`），自检时一并确认；顺带可在 debug 日志里报"本 tick 跳过 N 个 section"，便于现场判断
 4. `FixConfig` 本轮**不动**（A 不需要配置）；C 阶段再加 `rivetSpreadSlots`
-5. `README.md`：删「已知边界」的延迟条目；待办里加"§5 D 提上游 PR"
+5. `README.md`：**「已知边界」的延迟条目不要删**——1.1.0 不动 TTL，删了就是文档说谎（§5 B 是两步走）；要改的是「只治重复调用、不治算法」那一条，换成"section 剪枝有下限 + §5 D 才是根治"
 6. `CHANGELOG.md` / `CHANGELOG.en.md` 写 1.1.0
 7. `gradle.properties` 的 `mod_version=1.1.0`
 8. **改版本号必须 `clean`**，否则 `processResources` 不重跑，jar 内的 `neoforge.mods.toml` 仍是旧版本（已踩过）
@@ -297,16 +308,20 @@ $env:JAVA_HOME="C:\Program Files\Microsoft\jdk-21.0.9.10-hotspot"
 .\gradlew.bat runServer        # run\eula.txt 需 eula=true
 ```
 
-判据（启动日志）：
+判据（启动日志，1.1.0 实测输出）：
 
 ```
-[simcoastersfix] patch applied to CoasterCartBearingTickCache
-...
-[simcoastersfix] patch applied to CoasterCartPlotScan      ← 新增项
+[simcoastersfix] patch applied to CoasterCartBearingTickCache#simc$scans
+[simcoastersfix] patch applied to CoasterCartPlotScan#simc$sectionsSkipped
+[simcoastersfix] patch applied to RivetDisassemblyEnforcer#simc$lastRivetCheck
+[simcoastersfix] patch applied to RivetDisassemblyEnforcer#simc$lastSelfHostCheck
+[simcoastersfix] patch applied to CoasterCartTrackSnap#simc$teardownDone
+[simcoastersfix] patch applied to CoasterCartTrainLinkConstraint#simc$lastRestore
 [simcoastersfix] self-check OK: 6/6 mixin targets active
 ```
 
-若出现 `patch NOT applied`，第一嫌疑是 `@At` 目标在 `remap = false` 下没匹配上 vanilla 描述符（NeoForge 1.20.5+ 运行时用 official names，理论上应命中，但**这一条要实测确认**，见 §9 未决②）。
+若出现 `patch NOT applied`：`remap = false` 引 vanilla 描述符这一条**已实测命中**（§9② 已关闭），
+下一个嫌疑才是 `@At` 目标与上游版本不符。
 
 ### 7.2 收益是否真实
 
@@ -323,7 +338,11 @@ Select-String D:\tmp\samples.txt -Pattern "CoasterCartPlotScan" | Measure-Object
 
 - `CoasterCartPlotScan` 相关采样帧占比下降 **≥80%**（场景不变）
 - 同样存活的 sublevel 数量下，MSPT 有可测下降
-- `bearingScanTtl*=1`（关掉 TTL、回到每 tick 精确扫描）时，新 jar 的 MSPT **不高于**旧 jar 开 TTL 的水平 —— 这一条才是"更优"的真正证明
+- `bearingScanTtl*=1`（关掉 TTL、回到每 tick 精确扫描）时，新 jar 的 MSPT **不高于**旧 jar 开 TTL 的水平 —— 这一条才是"更优"的真正证明。§4.4 的实测已经给出这个方向的证据（无 rivet 的 plot 上，每 tick 扫描只剩 0.9% 一个 tick 线程）
+
+**单次成本的绝对值**（每次扫描多少 section / 多少 block / 多少 ns）JFR 看不到。2026-11-16
+用一次性探针量过一轮，数字留在 §12；探针本身已经从代码里移除（它只是测量脚手架，不该
+跟着发布版走）。要复测就临时加回去，或者直接用 §12 的推导口径。
 
 ### 7.3 正确性回归
 
@@ -347,7 +366,7 @@ Select-String D:\tmp\samples.txt -Pattern "CoasterCartPlotScan" | Measure-Object
 ## 9. 未决问题
 
 1. **上游 0.1.6 会不会自己修？** 0.1.5 的 changelog 说在治 FPS，但目前 latest 仍是 0.1.5。若 0.1.6 改了扫描实现，A 的注入点可能失效——需要在那时立刻回归。
-2. **NeoForge 运行时命名**：`remap = false` 的 mixin 里引用 vanilla 成员，在 1.21.1 production 是否稳定命中，需 §7.1 实测确认。
+2. ~~**NeoForge 运行时命名**~~ ✅ **已关闭（1.1.0 实测）**：`remap = false` 的 mixin 引用 vanilla 成员在 1.21.1 命中，dev 与 production 同一套 official names，`LevelChunkSection;hasOnlyAir()Z` 零问题。
 3. **客户端 `classify` 是否值得单独治**：只在新增 / DIRTY / 区块数变化时全量，频率未知，需要客户端侧 JFR 采样。
 4. **`synchronizedMap` 是否可以去掉**：需要先确认 sable 的 sublevel 容器有无异步访问路径（§5 F）。
 
@@ -365,6 +384,199 @@ Select-String D:\tmp\samples.txt -Pattern "CoasterCartPlotScan" | Measure-Object
 它是 `nonEmptyBlockCount == 0` 的 O(1) 缓存字段。一开始我误以为它已经做了一次调色板级过滤——实际上它只挡纯空气，有任意方块的 section 都会跑满 4096 次。**这直接决定了 A 的收益量级**，也是本文档能成立的关键。
 
 ---
+
+## 11. 落地记录（1.1.0，2026-11-16）
+
+A 已落地并通过 `runServer` 实测。留**证据口径**，别只信日志行：
+
+| 项 | 结果 |
+|---|---|
+| 产物 | `build/libs/simcoastersfix-1.1.0.jar`（246,863 B），jar 内 `neoforge.mods.toml` 为 `version="1.1.0"` |
+| 自检 | `self-check OK: 6/6 mixin targets active`，含 `CoasterCartPlotScan#simc$sectionsSkipped` |
+| `remap = false` 命中 | ✅ 未决②关闭（§9） |
+| 注入形态 | `run/.mixin.out/class/.../CoasterCartPlotScan.class`（`-Dmixin.debug.export=true` 导出）：`scanBearingCells` 的调用点变成 4 参 wrapper（`LevelChunkSection, Operation, LevelPlot, Block`），`forEachBearingWorldCell` 是 5 参带 `Consumer`；原操作留在 `mixinextras$bridge$hasOnlyAir$8/9` 里 |
+| 环境 | `runServer` + simulatedcoasters 0.1.5 / sable 2.0.6 / create 6.0.10（flywheel / ponder / veil 由 jarjar 带入），`Done (3.864s)` |
+
+**没验到的**：运行时数据面。`runServer` 里没有 sublevel，`scanBearingCells` 一次都没真跑过——
+正确性依据是 §4.2 的等价性论证加上面的字节码形态，**不是跑出来的**。§7.3 的 cart 放/破、
+轨道对接、蓝图粘贴、双 rivet 分支仍需在真实存档里过一遍。
+
+代码落点：
+
+- `src/main/java/dev/shiratori/simcoastersfix/mixin/PlotScanSectionFilterMixin.java`
+- `src/main/java/dev/shiratori/simcoastersfix/util/SectionFilter.java` — 谓词放这里而不是 mixin 内，
+  目标类不会多出合成 lambda 方法（合成方法合并后容易和其它 mixin 撞名），也便于单独验证
+- `PatchSelfCheck.TARGETS` → 6 条，新增 `targetCount()` 供启动日志用（原来硬编码的
+  "4 mixin targets" 已经和实际条目脱钩——这类数字只能有一个来源）
+
+**追加：一轮实测（同日）**。§7.2 原来只有「用 JFR 看占比」，看不到单次扫描的绝对量与
+section 分解。2026-11-16 用一次性探针量了一轮，结论在 §12；探针代码已移除。两条最重要的：
+
+- §3.2 的 `c ≈ 1–3 ns` 实测是 **20–24 ns/block**（热态），那两节的成本表**偏低约 8 倍**（已按实测重算）。
+- TTL 命中 **99.7%**，扫描频率降 20–40 倍——第一次用直接计数验证 §2 的推断，而不是靠推理。
+
+**与 §6 原计划的偏差**：§6 第 5 条让删 README「已知边界」的延迟条目，**没删**。TTL 本轮未动，
+延迟依然存在；延迟条目留到 §5 B 第二步（TTL 默认值改 1）时一起处理，本轮只重写了
+「只治重复调用、不治算法」那条。
+
+## 12. 实测数据（2026-11-16，一次性探针）
+
+用来验证 §3.2 的 est 和 §4 的收益。**探针代码已移除**（测量脚手架不进发布版，见 §11）；
+下面留数字和口径，要复测就临时加回去。原始日志在 `build/probe2.log`、`build/probe3.log`。
+
+场景：dev `runServer`（NeoForge 21.1.249 / MC 1.21.1，平世界），`/sable spawn sphere 8` 造 4 个
+sublevel，物理暂停。每个 plot 约 9 个区块 → **每次扫描 216 个 section 槽位**（9 × 24，
+与 §3.2 的「每区块 24 section」吻合）。造场景的手段是 RCON（`tools/rcon.ps1`），因为
+`runServer` 不转发 stdin。
+
+### 12.1 调用频率与 TTL
+
+| 配置 | scanBearingCells | TickCache.scan 调用 | 缓存命中 | 单次扫描 section | 扫描耗时 ÷ 墙钟 |
+|---|---|---|---|---|---|
+| 出货默认 TTL 40 / 100 | 1.6–2.1 /s | 210 /s | **99.75%** | 216 | **0.008%** |
+| TTL = 1（≈原版频率） | **41–62 /s** | 241 /s | 仅同 tick 去重 | 216 | **0.076%** |
+
+整轮累计：`cache calls=38,788 hit=37,654 store=1,134` → **命中 97.1%**。
+
+### 12.2 单次成本
+
+| 状态 | ns / block | 单次扫描 p50 | p95 | 说明 |
+|---|---|---|---|---|
+| 冷（前 20–50 次调用，解释执行） | **85–130** | 65–131 µs | 262 µs–2.1 ms | 别拿这组当结论 |
+| 热（每 5s 300+ 次扫描） | **20–24** | **16.4 µs** | 16–65 µs | 稳态 |
+
+### 12.3 A 的收益
+
+| 场景 | walked section | 不补丁应有 | 省掉 |
+|---|---|---|---|
+| plot 里没有目标方块（最常见） | 0 | 6,586,368 block / 5s | **100%** |
+| plot 里有目标方块 | 2–3 / 次 | — | 89–95% |
+| 整轮累计 | 402 | 82,845,696 block | **98.0%** |
+
+### 12.4 §3.3「最大漏网」的量化
+
+`RivetDisassemblyEnforcer.enforceSingleRivet` 对 4 个**没有 rivet** 的 sublevel、把间隔调到 1
+（= 原版行为）：80 次扫描/s，不补丁时本应 **1,317,274 次 `getBlockState`/s**；A 之后只占
+tick 线程 **0.85–0.90%**。这支持 §5 B：单次成本已经低到可以每 tick 跑，TTL 退场的前提成立。
+
+### 12.5 口径与局限
+
+- 扫描耗时占比 = `nanosTotal / 窗口墙钟`（tick 线程整段时间都在跑 tick）。**不要**再乘 20，
+  那是把「一个 tick 的预算」和「墙钟占比」混在一起，会把数字放大 20 倍（踩过）。
+- 「不补丁时该走多少 block」是算术推出来的：A 跳过的 section 正是「不补丁也会走完 4096 格
+  然后 0 命中」的那些，所以基线 = `(walk + paletteSkip) × 4096`。时间基线不能这么推。
+- 开发机、平世界、球体，不是真实存档；探针只在 4 个 sublevel 上跑过。
+- `forEachBearingWorldCell` 整轮只采到 7 个样本，其中一次 292 ms 离群发生在冷启动 + 拆解
+  路径上，**样本不足以定性**。
+
+## 13. 1.2.0：原版把「每 tick 变的值」当成了「只跑一次的标记」，写了两遍
+
+同一个思维错误在原版里出现了两次，写法一字不差：
+
+```java
+Long last = LAST_RESTORE_GAME_TIME.get(dimension);
+if (last == null || last != gameTime) {     // gameTime 每 tick 都变 → 恒成立
+   LAST_RESTORE_GAME_TIME.put(dimension, gameTime);
+   restoreXXX(level);                       // ← 每 tick 全量，不是「一次」
+}
+```
+
+| 位置 | 行 | 1.2.0 前 | 1.2.0 |
+|---|---|---|---|
+| `CoasterCartTrainLinkConstraint.maybeRestorePersistedLinks` | `:270-278` | 1.0.0 起已限流 60 刻 | 不变 |
+| `BalloonTetherController.maybeRestoreTethers` | `:217-225` | **每物理 tick** 调 `restoreTethers`，遍历全部 sublevel（每个一次 `getBlockState(ZERO)` + 一次 `containsKey`） | 默认 40 刻一次 |
+
+另外两处是「同一个 tick 内把同样的答案再问一遍」，都用 `TickEvalMemo` 收掉：
+
+- `BalloonTetherController.onPrePhysicsTick`：两趟遍历，每趟各解析 气球 → sublevel → 方块实体 → 宿主。
+  字节码里能看到两处 `findBalloonById`、两处 `balloonBlockEntity`、两处 `resolveHostSubLevel` 都被包了一层。
+- `CoasterCartTrainLinkConstraint.tick`：每条活跃连杆解析 cart A / cart B，同 tick 内的重复丢掉。
+
+**为什么可以等价**：`TickEvalMemo` 的作用域是**一次钩子调用**——`begin()` 在 HEAD、`end()` 在 RETURN，
+而这两个钩子内部不改 sublevel 容器、不改方块实体，所以同一个 tick 内的第二次查询不可能得到不同答案。
+`begin()` 无条件清空而不是数嵌套层数，是为了让「钩子抛异常导致 `end()` 没跑」也不会把旧值留到下一次。
+
+**没动的地方（有意）**：`ACTIVE_LINKS` 的 `List.copyOf` 快照（遍历中解链的安全前提）、气球的两处
+悬停射线、每气球的向量分配。这三样要么有并发语义，要么接在物理反馈里，都不属于「零行为差异」。
+
+### 13.1 1.3.0：气球路径的物理管线读取
+
+同一个「一次调用内答案不变」的口径用在物理管线上：`applyTetherSpring` 取气球线速度/角速度与宿主
+线速度/角速度共 4 次，`dampHostSwing` 再取宿主 2 次，`dampHostVerticalInBand` 再取 1 次。字节码确认
+**7 个调用点被 5 个 `@WrapOperation` 覆盖**（同一方法里同描述符的多个调用点由一次注解全部包住）。
+
+依据是 Sabre/Rapier 的语义：这次钩子里调的 `applyAndRecordPointForce` / `applyLinearImpulse` 只是
+**入队**，速度在 `step` 时才变，所以同一刚体的速度在一次 `onPrePhysicsTick` 内恒定。复用是
+`destination.set(cached)` 拷进调用方缓冲区，不是返回共享实例——上游确实会原地改这些向量。
+
+刻意没碰 `wakeUp` 的重复调用：没有证据说明它贵，而每多一个注入点就多一处「上游改名即崩」。
+
+**探针已移除**（§11），所以 1.2.0 的三项**没有独立实测数据**；上线前按 §7.2 用 JFR 看
+`BalloonTetherController` / `CoasterCartTrainLinkConstraint` 的帧占比，或临时把开关逐个关掉做 A/B。
+
+## 14. 「车在轨道上贵几倍」的实测归因（1.4.0）
+
+用户观察：车吸附在过山车轨道上时，性能消耗是不在轨道上的几倍。以下是实测出来的原因，
+以及一次被数据推翻的假设。
+
+### 14.1 先说被推翻的那个假设
+
+看了 `CoasterCartTrackSnap` 的吸附分支后，第一判断是「每车每 tick 多一个 5/6 轴锁定的
+`GenericConstraintHandle`，solver 每个 substep 都要解它」。**实测否定**：
+
+```
+20s 采样（车在轨道上跑），server tick 线程：
+  Rapier3D.step                     17.79% self
+  CoasterPeerCurveHandleLengths.getCanonicalLengths   16.21% ←
+  CoasterPeerCurveHandleLengths.edgeKeyFromEndpoints   6.68% ←
+  Rapier3D.isConstraintValid         1.13%
+```
+
+关节类帧（`addConstraint` / `setFrame` / `isConstraintValid`）加起来 1% 出头，**不是主因**。
+同一次采样里曲线手柄长度占了 **21.8–30.9%**（249–301 / 999–1141 busy 样本）。
+
+### 14.2 真凶与机制
+
+`CoasterPeerCurveHandleLengths.getLengthAtEndpoint`（被曲线采样循环每点调用两次）:
+
+1. **无条件**先算 `fallbackSingleHandleLength` → `BezierConnection.getHandleLength()`；
+2. 后者被上游自己的 `BezierConnectionGetHandleLengthCoasterMixin` 包着，又回递归调
+   `getCanonicalLengths` —— 一次端点查询 = **两次** canonical 查询；
+3. 每次 `getCanonicalLengths` = 2 次 `synchronizedMap(WeakHashMap)` 查询 +
+   拼一个 `"<long>:<long>"` String 键 + 1 次 `HashMap<String>` 查询。
+
+所以每个曲线采样点约 4 次这样的三连查。这就是「在轨道上」独有的开销：不吸附的车根本走不到
+`CoasterBezierEdgeSamplingContext.plotLocalCenterline` 这条路径。
+
+### 14.3 修法与 A/B（1.4.0）
+
+缓存 `getLengthAtEndpoint`（返回 `double`，无别名问题），用上游自带的 `AtomicLong REVISION`
+精确失效——每个写入者（`putCanonical` / `putPreviewCanonical` / `commitPreviewLengths` /
+`removeEdge` / `takeCanonicalLengthsForRemap`）都会 bump 它，所以**不引入任何时间滞后**。
+
+同一会话内热切换 `curveHandleLengthCache` 做 A/B（不用重启客户端）：
+
+| | busy 样本 | 曲线样本 | 其中 canonical | MSPT p95 | p99 |
+|---|---|---|---|---|---|
+| 关闭（= 上游） | 1141 / 1137 | 249 / 351 | **219 / 328** | 14.12 / 14.63 | 15.99 / 16.90 |
+| 开启 | 876 / 715 | 84 / 93 | **0 / 0** | 13.60 / 11.76 | 15.46 / 13.42 |
+
+`getCanonicalLengths` 与 `edgeKeyFromEndpoints` 在开启后**一个样本都不剩**；剩下的 84/93 全是
+我们缓存命中本身的开销（`wrapMethod$...$simc$cachedLengthAtEndpoint` 7.4–9.5% busy）。
+
+### 14.4 还能再压吗
+
+- **可以，但风险更高**：给 `BezierConnection` 加一个 `@Unique` 字段存 `(revision, h0, h1)`，
+  把缓存命中从「一次 map 查表 + 拆箱」压到「一次字段读」，预计能把剩下的 7–9% 再砍掉大半。
+  代价是 mixin 进 Create 的类——上游/别的 mod 也在改 `BezierConnection`，冲突面变大。
+- **不值得**：`updateAfterSnap` 里那个用不上的 `GenericConstraintConfiguration` 构造、
+  `snapTargetWorld → snapMc` 算两遍（约 100–300 ns/车/tick），以及 `CoasterTrackStaffRailStabilizer.remove`
+  每 tick 的锁 + map remove（~50 ns）。
+
+### 14.5 教训
+
+上一轮我基于源码就直接断言「是关节」，结果 JFR 一测就被推翻。**「读代码得出的因果」必须用
+采样验证一次**，尤其是这种「看起来显然」的物理开销——真正贵的东西藏在采样循环里。
 
 ## 附录 A：调用点原始清单
 

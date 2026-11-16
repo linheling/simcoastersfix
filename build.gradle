@@ -17,7 +17,9 @@ dependencies {
             'libs/simulatedcoasters-0.1.5.jar',
             'libs/sable-2.0.6.jar',
             'libs/sable-companion-common-1.6.0.jar',
-            'libs/sable-photomancy-1.0.1.jar'
+            'libs/sable-photomancy-1.0.1.jar',
+            // Needed only for BezierConnection, which the curve-handle-length patch wraps.
+            'libs/create.jar'
     )
 }
 

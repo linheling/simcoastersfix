@@ -4,8 +4,8 @@
 > 本仓库是独立实现，不包含原模组的任何代码。
 
 `Create: Coasters Simulated 0.1.5` 的服务端性能补丁。**不改动原模组 jar**，用 Mixin 给四处
-「在 pre-physics tick 里每 tick 全量重跑」的调用加上限流。客户端可以继续用原版 0.1.5，
-网络协议没有任何变化。
+「在 pre-physics tick 里每 tick 全量重跑」的调用加上限流；1.1.0 起还给扫描原语本身加了一层
+section 级剪枝。客户端可以继续用原版 0.1.5，网络协议没有任何变化。
 
 **1.0.1 起还带一层 Sable Photomancy 蓝图兼容**（可选，装了 Photomancy 才生效）：
 让蓝图保存/粘贴时铆钉、气球、车厢连杆不再丢。原理与验收日志见
@@ -34,16 +34,44 @@
 而 `scan` 有 6 个调用点，且**不含 cart 的 sublevel 也照样被扫**。地图上绝大多数
 sublevel（组装体、机械、平台）都不含 cart，TTL=100 等于把这块开销压到 1/100。
 
+但 TTL 治的是**调多少次**，单次扫描的成本一直没动。`CoasterCartPlotScan` 拿
+`section.hasOnlyAir()` 当唯一剪枝，而那个方法只是 `nonEmptyBlockCount == 0`——它挡的是
+**纯空气** section。只要 section 里有一个方块（轨道、石头、羊毛），4096 次 `getBlockState`
+一次不少。1.1.0 在同一个判断上再叠一层 `section.maybeHas(state -> state.is(目标方块))`：
+调色板级判断，`GlobalPalette` 的 `maybeHas` 恒返回 `true`（保守放行），所以返回 `false`
+是**证明**而不是猜测——不含目标方块的 section 整段跳过，`count` / `cells` / 代表点全部不变，
+只是不再走本来就没命中的格子。这一层对 `RivetDisassemblyEnforcer` 的直调、客户端兜底和
+调试渲染器同时生效。
+
+**1.2.0 又补了三处每 tick 重复工作**：气球恢复扫描的守卫是 `last != gameTime`，而 `gameTime`
+每 tick 都变，于是它每物理 tick 遍历**全部 sublevel**，只为重新登记早就登记过的气球——和 1.0.0
+修的连杆恢复是同一个写法错误，原版在两处各写了一遍，之前只补了一处。另外气球 tick 与连杆 tick
+里各有一处「同一个 tick 内把同样的答案再问一遍」。三处都只在**一次钩子调用之内**复用，不缓存
+跨 tick 的结果；三个开关都在配置里，关掉即回到上游行为。
+
+**1.4.0 治的是「车在轨道上贵几倍」**：实测发现那段开销不是物理，而是贝塞尔曲线手柄长度被每个
+采样点重复解析（`getLengthAtEndpoint` 每次内部还会再查两遍 canonical，而每次查询是两次
+`synchronized` WeakHashMap + 一个新建 String 键）。现在按「连接 + 端点」缓存、用上游自带的
+revision 精确失效。A/B 实测：canonical 查找样本 219/328 → **0/0**，曲线帧总样本 249/351 → 84/93，
+MSPT p95 14.6 → 11.8 ms。开关 `curveHandleLengthCache`。原理与数据见
+[`OPTIMIZATION.md`](OPTIMIZATION.md) §14。
+
 ## 配置
 
 `config/simcoastersfix-server.toml`（首次启动生成）：
 
 ```toml
-bearingScanTtlTicksWithCart     = 40   # 有轴承格 sublevel 的扫描缓存刻数
-bearingScanTtlTicksEmpty        = 100  # 无轴承格 sublevel 的扫描缓存刻数
-rivetCheckIntervalTicks         = 30   # 铆钉单铆钉检查间隔
-rivetSelfHostCheckIntervalTicks = 20   # 铆钉自托管弹出检查间隔
-trainLinkRestoreIntervalTicks   = 60   # 连杆恢复间隔
+bearingScanTtlTicksWithCart      = 40    # 有轴承格 sublevel 的扫描缓存刻数
+bearingScanTtlTicksEmpty         = 100   # 无轴承格 sublevel 的扫描缓存刻数
+rivetCheckIntervalTicks          = 30    # 铆钉单铆钉检查间隔
+rivetSelfHostCheckIntervalTicks  = 20    # 铆钉自托管弹出检查间隔
+trainLinkRestoreIntervalTicks    = 60    # 连杆恢复间隔
+balloonRestoreThrottle           = true  # 气球恢复扫描是否限流（1.2.0）
+balloonRestoreIntervalTicks      = 40    # 气球恢复扫描间隔（1.2.0）
+balloonTickMemo                  = true  # 气球 tick 内重复查询去重（1.2.0）
+balloonPhysicsMemo               = true  # 气球 tick 内物理管线速度读取去重（1.3.0）
+curveHandleLengthCache           = true  # 贝塞尔手柄长度缓存（1.4.0）
+trainLinkTickMemo                = true  # 连杆 tick 内重复查询去重（1.2.0）
 ```
 
 调大 = 更省 CPU、感知更迟；**任一值设为 1 = 回到原版行为**，可用于 A/B 对照排障。
@@ -52,14 +80,22 @@ trainLinkRestoreIntervalTicks   = 60   # 连杆恢复间隔
 
 Mixin 的注入只有在**目标类被加载**时才校验。类没被加载过，日志里就一片安静——
 「没报错」很容易被误读成「补丁生效了」。所以模组在服务器启动完成时主动强制加载
-四个目标类，检查注入的 `@Unique` 字段是否存在，逐项打日志：
+五个目标类，逐个检查注入的 `@Unique` 字段是否存在（十一个注入点，`RivetDisassemblyEnforcer` 与
+`CoasterCartTrainLinkConstraint` 各占两项，`BalloonTetherController` 占三项）：
 
 ```
-[simcoastersfix] patch applied to CoasterCartBearingTickCache
-[simcoastersfix] patch applied to RivetDisassemblyEnforcer
-[simcoastersfix] patch applied to CoasterCartTrackSnap
-[simcoastersfix] patch applied to CoasterCartTrainLinkConstraint
-[simcoastersfix] self-check OK: 4/4 mixin targets active
+[simcoastersfix] patch applied to CoasterCartBearingTickCache#simc$scans
+[simcoastersfix] patch applied to CoasterCartPlotScan#simc$sectionsSkipped
+[simcoastersfix] patch applied to RivetDisassemblyEnforcer#simc$lastRivetCheck
+[simcoastersfix] patch applied to RivetDisassemblyEnforcer#simc$lastSelfHostCheck
+[simcoastersfix] patch applied to CoasterCartTrackSnap#simc$teardownDone
+[simcoastersfix] patch applied to CoasterCartTrainLinkConstraint#simc$lastRestore
+[simcoastersfix] patch applied to BalloonTetherController#simc$balloonRestoreAt
+[simcoastersfix] patch applied to BalloonTetherController#simc$balloonTickMemo
+[simcoastersfix] patch applied to BalloonTetherController#simc$balloonPhysicsMemo
+[simcoastersfix] patch applied to CoasterCartTrainLinkConstraint#simc$trainLinkTickMemo
+[simcoastersfix] patch applied to CoasterPeerCurveHandleLengths#simc$handleLengths
+[simcoastersfix] self-check OK: 11/11 mixin targets active
 ```
 
 看到 `self-check FAILED` 说明目标模组版本对不上，注入点没找到——此时
@@ -73,11 +109,11 @@ Mixin 的注入只有在**目标类被加载**时才校验。类没被加载过�
 等稳定 API）。
 
 ```
-gradlew.bat build          # 产物 build/libs/simcoastersfix-1.0.1.jar
+gradlew.bat build          # 产物 build/libs/simcoastersfix-1.4.0.jar
 gradlew.bat runServer      # 本地 dev 验证（run/mods 需放 create + sable + simulatedcoasters）
 ```
 
-`libs/` 下四个 jar 只用于编译期符号解析，**不会打进产物**，也**不在仓库里**
+`libs/` 下五个 jar 只用于编译期符号解析，**不会打进产物**，也**不在仓库里**
 （`.gitignore` 已排掉 `libs/*.jar`）。自行准备：
 
 - `simulatedcoasters-0.1.5.jar` — 补丁目标（MIT）
@@ -86,8 +122,10 @@ gradlew.bat runServer      # 本地 dev 验证（run/mods 需放 create + sable 
   `ServerSubLevel.getLevel()` 声明在这个 companion 接口上，缺它编译不过
 - `sable-photomancy-1.0.1.jar` — 蓝图兼容层要编的 `api.blueprint.*` 扩展点；**只在编译期需要**，
   运行期由 Photomancy 本体提供
+- `create.jar` — 1.4.0 起需要：曲线手柄长度补丁要编 `BezierConnection`（Create `6.0.10`，MIT/ARR 双协议）；
+  **只在编译期需要**，运行期由 Create 本体提供
 
-这四个 jar 属于第三方产物，再分发各有条件，因此不随源码发布。
+这五个 jar 属于第三方产物，再分发各有条件，因此不随源码发布。
 
 ## 与上游 fork 的差异
 
@@ -106,9 +144,14 @@ gradlew.bat runServer      # 本地 dev 验证（run/mods 需放 create + sable 
 ## 已知边界
 
 - TTL 是**可见延迟**：cart 轴承格变化最坏要等 40 刻（有轴承）/ 100 刻（无轴承）才被感知。
-  频繁插拔 cart 的场景可以调小 `bearingScanTtlTicksEmpty`。
-- 本补丁只治「重复调用」，不治 `scanBearingCells` 本身 O(chunks×sections×4096) 的算法。
-  根治要把扫描换成 section 层的非空气格索引——那是上游作者的事。
+  频繁插拔 cart 的场景可以调小 `bearingScanTtlTicksEmpty`。1.1.0 只降单次扫描成本，没有
+  缩短这个延迟——把 `bearingScanTtl*` 设成 `1` 才能回到每 tick 精确扫描的观感。
+- section 级剪枝有**下限**：含 >256 种方块状态的 section 走 `GlobalPalette`，`maybeHas`
+  恒为 `true`，那类 section 退回原来的 4096 格全扫。常见场景（轨道 + 空气 + 少量装饰）远
+  达不到 256 种，收益正常。
+- 真正的根治是**事件驱动索引**（`plot → Set<BlockPos>`，在 setBlock / destroyBlock 上增量
+  维护，扫描退化成一次查表）。那要改数据结构与不变量，属于上游作者的活，本补丁只提交短期
+  patch——见 [`OPTIMIZATION.md`](OPTIMIZATION.md) §5 D。
 - 服务端装即可，客户端不必装——**但这条只对专用服务器成立**。单人游戏里集成服务端跑在客户端进程内，
   jar 仍然要放进客户端的 `mods/`。装在纯客户端也无害（tick 处理器和蓝图钩子都只在服务端跑）。
 
@@ -126,7 +169,7 @@ gradlew.bat runServer      # 本地 dev 验证（run/mods 需放 create + sable 
 ## 开发文档
 
 - [`BLUEPRINT_COMPAT.md`](BLUEPRINT_COMPAT.md) — 蓝图兼容层的原理与验收日志
-- [`OPTIMIZATION.md`](OPTIMIZATION.md) — 性能分析：热路径数据、调用点谱系、待办优化方案（section 级剪枝）与 JFR 验证方法
+- [`OPTIMIZATION.md`](OPTIMIZATION.md) — 性能分析：热路径数据、调用点谱系、section 级剪枝（已落地）、实测数据与 JFR 验证方法
 
 ## 许可
 

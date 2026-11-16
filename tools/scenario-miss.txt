@@ -1,0 +1,16 @@
+# Dev-only: spawn a few sub-levels so CoasterCartPlotScan actually has a plot to walk.
+# Used to reproduce the numbers in OPTIMIZATION.md §12.
+#
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\rcon.ps1 -CommandFile tools\scenario-miss.txt
+#
+# Requires run/server.properties with enable-rcon=true + rcon.password matching tools/rcon.ps1.
+# NOTE: '/sable spawn platform <n>' takes a COUNT, not a side length - 64 makes 64 single-block
+# sub-levels, not one 64x64 platform. 'sphere <radius> <blockstate>' makes one sub-level.
+# Don't call 'sable info' here: with many sub-levels it dumps thousands of lines over RCON.
+gamerule doMobSpawning false
+gamerule randomTickSpeed 0
+gamerule doDaylightCycle false
+gamerule doWeatherCycle false
+sable paused true
+sable spawn sphere 8 minecraft:stone
+sable spawn sphere 8 minecraft:stone

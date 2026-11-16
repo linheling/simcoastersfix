@@ -29,6 +29,46 @@ public final class FixConfig {
             .comment("Minimum ticks between persisted cart-train link restores per dimension (60 = 3s).")
             .defineInRange("trainLinkRestoreIntervalTicks", 60, 1, 72000);
 
+    public static final ModConfigSpec.BooleanValue BALLOON_RESTORE_THROTTLE = BUILDER
+            .comment("Throttle BalloonTetherController.maybeRestoreTethers.",
+                    "Upstream guards it with 'last != gameTime', which is true every tick, so it rescans every",
+                    "sub-level on every physics tick to re-register balloons that are already registered.",
+                    "Disable to restore the upstream per-tick behaviour.")
+            .define("balloonRestoreThrottle", true);
+
+    public static final ModConfigSpec.IntValue BALLOON_RESTORE_INTERVAL = BUILDER
+            .comment("Minimum ticks between balloon restore scans when balloonRestoreThrottle is on (40 = 2s).",
+                    "Worst case: a balloon that never went through the sub-level observer takes this long",
+                    "to be tethered after it appears. Set to 1 for the upstream behaviour.")
+            .defineInRange("balloonRestoreIntervalTicks", 40, 1, 72000);
+
+    public static final ModConfigSpec.BooleanValue BALLOON_TICK_MEMO = BUILDER
+            .comment("Memoise the balloon lookups inside one BalloonTetherController.onPrePhysicsTick.",
+                    "The hook resolves each balloon's sub-level, block entity and host twice (once per pass);",
+                    "this drops the second lookup of each. Behaviour is identical - nothing mutates inside one tick.")
+            .define("balloonTickMemo", true);
+
+    public static final ModConfigSpec.BooleanValue TRAIN_LINK_TICK_MEMO = BUILDER
+            .comment("Memoise the cart lookups inside one CoasterCartTrainLinkConstraint.tick.",
+                    "Each active link resolves cart A and cart B, and the same UUIDs are resolved again on the",
+                    "next tick. Only the duplicate within a single tick is dropped; behaviour is identical.")
+            .define("trainLinkTickMemo", true);
+
+    public static final ModConfigSpec.BooleanValue BALLOON_PHYSICS_MEMO = BUILDER
+            .comment("Memoise the physics-pipeline velocity reads inside one balloon pre-physics tick.",
+                    "The balloon hook applies queued forces, so a body's velocity cannot change between two",
+                    "reads in the same tick; the duplicate reads and duplicate wakeUp calls are dropped.",
+                    "Callers still receive a private copy, so physics behaviour is unchanged.")
+            .define("balloonPhysicsMemo", true);
+
+    public static final ModConfigSpec.BooleanValue CURVE_HANDLE_LENGTH_CACHE = BUILDER
+            .comment("Cache canonical bezier handle lengths per connection.",
+                    "Upstream resolves them with two synchronized WeakHashMap lookups plus a freshly built",
+                    "string key, on a path that runs per curve sample and re-enters itself through the",
+                    "getHandleLength mixin. Measured as the hottest frame on the server tick thread.",
+                    "Invalidated exactly by the upstream revision counter, which every writer bumps.")
+            .define("curveHandleLengthCache", true);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     private FixConfig() {
@@ -39,14 +79,32 @@ public final class FixConfig {
         FixLimits.rivetIntervalTicks = get(RIVET_INTERVAL, FixLimits.rivetIntervalTicks);
         FixLimits.selfHostIntervalTicks = get(SELF_HOST_INTERVAL, FixLimits.selfHostIntervalTicks);
         FixLimits.linkRestoreIntervalTicks = get(LINK_RESTORE_INTERVAL, FixLimits.linkRestoreIntervalTicks);
+        FixLimits.balloonRestoreThrottle = get(BALLOON_RESTORE_THROTTLE, FixLimits.balloonRestoreThrottle);
+        FixLimits.balloonRestoreIntervalTicks = get(BALLOON_RESTORE_INTERVAL, FixLimits.balloonRestoreIntervalTicks);
+        FixLimits.balloonTickMemo = get(BALLOON_TICK_MEMO, FixLimits.balloonTickMemo);
+        FixLimits.trainLinkTickMemo = get(TRAIN_LINK_TICK_MEMO, FixLimits.trainLinkTickMemo);
+        FixLimits.balloonPhysicsMemo = get(BALLOON_PHYSICS_MEMO, FixLimits.balloonPhysicsMemo);
+        FixLimits.curveHandleLengthCache = get(CURVE_HANDLE_LENGTH_CACHE, FixLimits.curveHandleLengthCache);
         Simcoastersfix.LOGGER.info(
-                "[{}] limits: bearingTtl(cart/empty)={}/{}, rivet={}, selfHost={}, linkRestore={}",
+                "[{}] limits: bearingTtl(cart/empty)={}/{}, rivet={}, selfHost={}, linkRestore={},"
+                        + " balloonRestore={}({}), balloonMemo={}, balloonPhysicsMemo={}, trainLinkMemo={},"
+                        + " curveHandleLengthCache={}",
                 Simcoastersfix.MODID,
                 FixLimits.bearingTtlWithCart, FixLimits.bearingTtlEmpty,
                 FixLimits.rivetIntervalTicks, FixLimits.selfHostIntervalTicks,
-                FixLimits.linkRestoreIntervalTicks);
+                FixLimits.linkRestoreIntervalTicks,
+                FixLimits.balloonRestoreThrottle, FixLimits.balloonRestoreIntervalTicks,
+                FixLimits.balloonTickMemo, FixLimits.balloonPhysicsMemo, FixLimits.trainLinkTickMemo,
+                FixLimits.curveHandleLengthCache);
     }
     private static int get(ModConfigSpec.IntValue value, int fallback) {
+        try {
+            return value.get();
+        } catch (RuntimeException e) {
+            return fallback;
+        }
+    }
+    private static boolean get(ModConfigSpec.BooleanValue value, boolean fallback) {
         try {
             return value.get();
         } catch (RuntimeException e) {

@@ -20,7 +20,7 @@ public class Simcoastersfix {
     public Simcoastersfix(IEventBus modEventBus, ModContainer modContainer) {
         modContainer.registerConfig(ModConfig.Type.SERVER, FixConfig.SPEC);
         modEventBus.addListener(this::commonSetup);
-        LOGGER.info("[{}] server perf patch armed (4 mixin targets)", MODID);
+        LOGGER.info("[{}] server perf patch armed ({} mixin targets)", MODID, PatchSelfCheck.targetCount());
     }
 
     private void commonSetup(FMLCommonSetupEvent event) {
