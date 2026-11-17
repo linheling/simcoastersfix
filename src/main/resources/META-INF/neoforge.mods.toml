@@ -13,6 +13,11 @@ logoFile="logo.png"
 [[mixins]]
 config="simcoastersfix.mixins.json"
 
+# Probe config: required=false + defaultRequire=0, so a future upstream that moves one of these
+# methods loses probe data instead of crashing the game. The probes are observation only.
+[[mixins]]
+config="simcoastersfix-probes.mixins.json"
+
 [[dependencies.${mod_id}]]
 modId="neoforge"
 versionRange="${neo_version_range}"
@@ -27,9 +32,13 @@ type="required"
 ordering="NONE"
 side="BOTH"
 
+# 1.5.0 targets 0.1.6 and only 0.1.6: the probes hook classes that version introduced, and the
+# remaining perf mixins were validated against its bytecode. A future 0.1.7 must be checked with
+# javap (or a runServer self-check) before this range is widened - 0.1.6 itself moved three
+# injection points that 1.4.1 relied on.
 [[dependencies.${mod_id}]]
 modId="simulatedcoasters"
-versionRange="[0.1.5,)"
+versionRange="[0.1.6,0.1.7)"
 type="required"
 ordering="AFTER"
 side="BOTH"

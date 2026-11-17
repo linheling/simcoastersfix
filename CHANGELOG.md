@@ -2,6 +2,58 @@
 
 > English release notes (for the CurseForge / Modrinth changelog field): [`CHANGELOG.en.md`](CHANGELOG.en.md)
 
+## 1.5.0 — 2026-11-17
+
+**适配 simulatedcoasters 0.1.6：删掉 3 个已失去目标的混入，新增默认开启的热点探针**
+
+现象：1.4.1 装 0.1.6，服务端**构造期**崩：
+
+```
+ModLoadingException: Create: Coasters Simulated has failed to load correctly
+→ MixinTransformerError → InjectionError: simc$trackCartMembership … (0/1) succeeded. Scanned 0 target(s)
+```
+
+原因：0.1.6 把三个注入点改了结构——`CoasterCartTrackSnap.onPrePhysicsTick` 的循环体搬进
+`lambda$onPrePhysicsTick$0`；`maybeRestorePersistedLinks` 改名 private `maybeSafetyRestorePersistedLinks`；
+`LevelChunkSection.hasOnlyAir()` 被抽进 `skipSection`（**顺便，上游自己加了 `maybeHas` 调色板剪枝**，
+就是 1.1.0 那一条）。注入按方法名和指令找，找不到就按 `defaultRequire: 1` 致命。
+
+- **删除** `PlotScanSectionFilterMixin`、`TrackSnapBroadcastGuardMixin`、`TrainLinkRestoreThrottleMixin`
+  以及只被前者引用的 `util/SectionFilter`；自检 12 → **9** 项。
+- **保留**（对着 0.1.6 的字节码逐条核过，目标类字节未变）：贝塞尔手柄长度缓存、气球恢复节流、
+  气球 tick 内三处解析去重 + 7 处管线测速去重、连杆 tick 内 `findCartById` 去重。
+- **默认值改为「跟上游」**：`bearingScanTtl*` 1（同 tick 去重）、`rivet*` 1（交给 `beginEnforcePass`）、
+  `protectCartLinks` false（TTL=1 时没有滞后可兜）。删掉 `trainLinkRestoreIntervalTicks`。
+- **依赖钉死** `simulatedcoasters [0.1.6,0.1.7)`：版本不符时 FML 在加载期拒绝，而不是构造期崩。
+
+**新增：热点探针（默认开启）**
+
+0.1.6 把「每 tick 全量扫」换成事件索引，剩下的成本变成**每 tick 一次 O(sublevel) 的遍历**，
+单次很便宜、采样里看不见。探针把这几段单独计时/计数，每 600 tick 打一行：
+
+```
+[simcoastersfix] probes[600t]: cart.reconcile 3618x 4.54ms 1.25us/call | rivet.reconcileLive 1800x 1.61ms 0.89us/call | rivet.rivetsAndDirty 1800x 0.46ms 0.25us/call | alloc 0.43MB/s || total 11.01us/tick
+```
+
+- 计数项：`cart.readyChunks`（每 tick 每 sublevel 无条件遍历 plot chunks，**最可疑**）、
+  `cart.reconcile`、`cart.membershipScan`（缓存命中仍做一次 `getBlockState`）、`cart.reclassify`、
+  `rivet.reconcileLive`、`rivet.rivetsAndDirty`、`plot.scanBearingCells`，外加服务端线程分配率 `alloc`。
+- 开销：每次调用两次 `nanoTime`（~40 ns），只读；计数是裸 `long`，丢精度不丢正确性。
+- 探针混入在**独立 config**（`simcoastersfix-probes.mixins.json`，`required=false` +
+  `defaultRequire=0`）：将来上游再动这些方法，丢的是数据不是游戏。启动时 `probe self-check` 报 3/3。
+- 开关 `hotspotProbes` / `hotspotProbeIntervalTicks`。
+
+**实测**（dev 专服，NeoForge 21.1.249 / Java 21，simulatedcoasters 0.1.6 + 1.5.0 源码）：
+
+- `self-check OK: 9/9 mixin targets active`、`probe self-check OK: 3/3`；
+- 空载世界稳态 **10–11 µs/tick**，几乎全是 `reconcile` 的 early-out 与两次 rivet pass；
+  `cart.readyChunks` 为 0 是因为该测试世界没有 sublevel（有 sublevel 才会长起来）。
+
+**升级须知**：旧配置里的 `trainLinkRestoreIntervalTicks` 已无代码，NeoForge 会忽略；
+`bearingScanTtl*` / `rivet*` 的旧值会保留在文件里，等于只用了半个 1.5.0——**建议删掉配置文件重建**。
+
+原始对照材料（反编译产物、19 文件 diff、javap、三组起服日志）见 [`UPSTREAM-0.1.6.md`](UPSTREAM-0.1.6.md)。
+
 ## 1.4.1 — 2026-11-16
 
 **修复：重新加载世界后，车厢之间的连杆全部断掉（而且不可恢复）**

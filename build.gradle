@@ -14,7 +14,7 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
 dependencies {
     compileOnly files(
-            'libs/simulatedcoasters-0.1.5.jar',
+            'libs/simulatedcoasters-0.1.6.jar',
             'libs/sable-2.0.6.jar',
             'libs/sable-companion-common-1.6.0.jar',
             'libs/sable-photomancy-1.0.1.jar',

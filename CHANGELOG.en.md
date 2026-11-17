@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.5.0 — 2026-11-17
+
+**Port to simulatedcoasters 0.1.6: three mixins that lost their target are gone, and the build now ships hotspot probes (on by default)**
+
+Symptom: 1.4.1 on 0.1.6 crashed during mod construction:
+
+```
+ModLoadingException: Create: Coasters Simulated has failed to load correctly
+→ MixinTransformerError → InjectionError: simc$trackCartMembership … (0/1) succeeded. Scanned 0 target(s)
+```
+
+Cause: 0.1.6 restructured three injection points. `CoasterCartTrackSnap.onPrePhysicsTick`'s loop body moved into `lambda$onPrePhysicsTick$0`; `maybeRestorePersistedLinks` became the private `maybeSafetyRestorePersistedLinks`; `LevelChunkSection.hasOnlyAir()` moved into `skipSection` (and upstream added the same `maybeHas` palette pruning 1.1.0 did). Injections match by method name and instruction, so a miss is fatal under `defaultRequire: 1`.
+
+- **Removed** `PlotScanSectionFilterMixin`, `TrackSnapBroadcastGuardMixin`, `TrainLinkRestoreThrottleMixin` and the now-unused `util/SectionFilter`; the self-check goes 12 → **9** targets.
+- **Kept**, each re-verified against 0.1.6 bytecode (target classes unchanged): the bezier handle-length cache, the balloon restore throttle, the balloon lookup/physics memo, and the train-link cart-lookup memo.
+- **Defaults now follow upstream**: `bearingScanTtl*` = 1 (same-tick only), `rivet*` = 1 (upstream's `beginEnforcePass` owns the pass), `protectCartLinks` = false (nothing to guard at TTL=1). `trainLinkRestoreIntervalTicks` is gone.
+- **Dependency pinned** to `simulatedcoasters [0.1.6,0.1.7)`: a wrong version is refused at load time instead of crashing at construction.
+
+**New: hotspot probes (on by default)**
+
+0.1.6 replaced "scan everything every tick" with event-driven indexes, so the remaining cost is an **O(sub-levels) pass per tick** — cheap per element and invisible to a sampler. The probes time and count exactly those segments, one line every 600 ticks:
+
+```
+[simcoastersfix] probes[600t]: cart.reconcile 3618x 4.54ms 1.25us/call | rivet.reconcileLive 1800x 1.61ms 0.89us/call | rivet.rivetsAndDirty 1800x 0.46ms 0.25us/call | alloc 0.43MB/s || total 11.01us/tick
+```
+
+- Counters: `cart.readyChunks` (walks the plot's loaded chunks once per live sub-level per tick — **the most suspicious addition**), `cart.reconcile`, `cart.membershipScan` (a cache hit still validates one block with `getBlockState`), `cart.reclassify`, `rivet.reconcileLive`, `rivet.rivetsAndDirty`, `plot.scanBearingCells`, plus the server thread's allocation rate as `alloc`.
+- Cost: two `nanoTime` calls per invocation (~40 ns), observation only; counters are plain `long`s, so a race loses accuracy, never correctness.
+- The probes live in **their own config** (`simcoastersfix-probes.mixins.json`, `required=false` + `defaultRequire=0`): a future upstream that moves these methods costs probe data, not a crash. `probe self-check` reports 3/3 at startup.
+- Switches: `hotspotProbes` / `hotspotProbeIntervalTicks`.
+
+**Measured** (dev dedicated server, NeoForge 21.1.249 / Java 21, simulatedcoasters 0.1.6 + 1.5.0 sources): `self-check OK: 9/9`, `probe self-check OK: 3/3`, and **10–11 µs/tick** at steady state on an empty world — almost entirely the `reconcile` early-out plus the two rivet passes. `cart.readyChunks` stays at 0 there because that test world has no sub-levels.
+
+**Upgrade note**: an existing config still carries `trainLinkRestoreIntervalTicks` (ignored) and the old `bearingScanTtl*` / `rivet*` values — delete the file so the new defaults apply, otherwise you get only half of 1.5.0.
+
+Source material (decompiled trees, 19-file diff, javap dumps, three server runs): [`UPSTREAM-0.1.6.md`](UPSTREAM-0.1.6.md).
+
 ## 1.4.1 — 2026-11-16
 
 **Fixed: every cart-to-cart coupling in a train was erased a few seconds after a world load — permanently**

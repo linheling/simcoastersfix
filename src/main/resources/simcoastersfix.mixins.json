@@ -9,10 +9,7 @@
     "BearingScanThrottleMixin",
     "CartLinkGuardMixin",
     "CurveHandleLengthCacheMixin",
-    "PlotScanSectionFilterMixin",
     "RivetScanThrottleMixin",
-    "TrackSnapBroadcastGuardMixin",
-    "TrainLinkRestoreThrottleMixin",
     "TrainLinkTickMemoMixin"
   ],
   "injectors": {

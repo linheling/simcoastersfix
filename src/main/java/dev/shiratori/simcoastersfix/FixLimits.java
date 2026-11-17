@@ -1,17 +1,31 @@
 package dev.shiratori.simcoastersfix;
 
 public final class FixLimits {
-    public static int bearingTtlWithCart = 40;
+    /**
+     * Same-tick only. simulatedcoasters 0.1.6 resolves cart membership from an event-driven index
+     * ({@code CoasterCartServerMembership}), so a cross-tick TTL no longer saves a plot scan &mdash;
+     * it only re-introduces the "cannot see it, so it must be gone" window that 1.4.1 had to guard
+     * against. 1 = deduplicate within a tick, nothing more.
+     */
+    public static int bearingTtlWithCart = 1;
 
-    public static int bearingTtlEmpty = 100;
+    /** See {@link #bearingTtlWithCart}. */
+    public static int bearingTtlEmpty = 1;
 
-    public static int rivetIntervalTicks = 30;
+    /**
+     * 1 = leave the per-tick rivet pass to upstream's {@code RivetPlotMembership} guard (0.1.6 runs
+     * it once per game time and only over rivets + dirty plots). Raise this only to A/B the old
+     * every-N-ticks throttle.
+     */
+    public static int rivetIntervalTicks = 1;
 
-    public static int selfHostIntervalTicks = 20;
+    /** See {@link #rivetIntervalTicks}. */
+    public static int selfHostIntervalTicks = 1;
 
-    public static int linkRestoreIntervalTicks = 60;
-
-    /** Throttle {@code BalloonTetherController.maybeRestoreTethers}, which upstream runs every tick. */
+    /**
+     * Still worth it: {@code BalloonTetherController.maybeRestoreTethers} is unchanged in 0.1.6 and
+     * still guards with {@code last != gameTime}, i.e. it walks every sub-level every physics tick.
+     */
     public static boolean balloonRestoreThrottle = true;
 
     public static int balloonRestoreIntervalTicks = 40;
@@ -22,14 +36,18 @@ public final class FixLimits {
     /** Memoise the per-link cart lookups inside one {@code CoasterCartTrainLinkConstraint.tick}. */
     public static boolean trainLinkTickMemo = true;
 
-    /** Memoise the repeated physics-pipeline velocity reads / duplicate wakes inside one balloon hook. */
+    /** Memoise the repeated physics-pipeline velocity reads inside one balloon hook. */
     public static boolean balloonPhysicsMemo = true;
 
     /** Cache canonical bezier handle lengths per connection, invalidated by the upstream revision. */
     public static boolean curveHandleLengthCache = true;
 
-    /** Refuse destructive cart-train unlinks when cart membership cannot be observed. */
-    public static boolean protectCartLinks = true;
+    /**
+     * Off by default in 1.5.0: with the bearing TTL at 1 tick there is no stale negative to protect
+     * against, and 0.1.6's membership index already treats "plot not populated yet" as unknown.
+     * Turn it back on if you raise {@link #bearingTtlWithCart} / {@link #bearingTtlEmpty}.
+     */
+    public static boolean protectCartLinks = false;
 
     private FixLimits() {
     }

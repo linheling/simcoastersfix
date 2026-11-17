@@ -652,3 +652,66 @@ public boolean maybeHas(Predicate<T> p) { return this.data.palette.maybeHas(p); 
 ```java
 public boolean maybeHas(Predicate<T> p) { return true; }
 ```
+
+## 15. 1.5.0：上游把病根治了，我们改做「减法 + 量体温」
+
+**这是本文件里第一次「删代码」而不是「加代码」的版本。** 全部依据見
+[`UPSTREAM-0.1.6.md`](UPSTREAM-0.1.6.md)（反编译 + 19 文件 diff + javap + 三组起服实测）。
+
+### 15.1 病根被上游治好，节流失去目标
+
+0.1.6 引入了两个成员索引类（`CoasterCartServerMembership`、`RivetPlotMembership`），把
+「每 tick 全量扫」换成了「事件驱动 + 精确失效」：
+
+| 我们原来的补丁 | 0.1.6 的做法 | 结论 |
+|---|---|---|
+| 1.0.0 轴承扫描 TTL（40/100 刻） | 成员索引 + `readyPlotChunkCount` 处理加载窗口 | 删收益基础：`forEachCart` 已不再遍历非 cart |
+| 1.0.0 rivet 30/20 拍节流 | `beginEnforcePass` 每 gameTime 一次 + `rivetsAndDirty` | 保留代码但默认 1（无操作） |
+| 1.0.0 连杆恢复 60 拍 | `gameTime % 100 == 0` | 删除（方法改名成 private） |
+| 1.0.0 TrackSnap 广播去重 | `forEachCart` 只遍历 cart | 删除（调用点进了 lambda） |
+| 1.1.0 section 剪枝 | `skipSection` 内的 `maybeHas` | 删除（上游同款） |
+
+`1.1.0` 那次判断是对的——上游用了**一模一样**的一行 `maybeHas(state -> state.is(block))`。
+这条值得记下来：补丁的价值有保质期，上游一旦内建，继续留着只是多一个会随版本崩的注入点。
+
+### 15.2 为什么 1.5.0 不「顺手再找几个新优化」
+
+因为 0.1.6 的剩余成本换了形状：不是某个函数贵，而是**每 tick 一次 O(sublevel) 的遍历**
+（`reconcile`、`reconcileLive`、`rivetsAndDirty`），单次 0.25–1.3 µs，采样器的 self-time 里几乎看不见。
+按 §14 的教训（读代码得出的因果必须用采样验一次），这时候应该先**量**，而不是先写 mixin。
+
+所以 1.5.0 带的是探针（默认开）：
+
+| 计数项 | 目标 | 假设（待证） |
+|---|---|---|
+| `cart.readyChunks` | `CoasterCartPlotScan.readyPlotChunkCount` | 每 tick 每 sublevel **无条件**遍历 plot 的 loaded chunks（在 `needsClassify` 之前算），是 0.1.6 新增开销里最可疑的一条 |
+| `cart.reconcile` | `CoasterCartServerMembership.reconcile` | 每 tick 每维度被调多次，只有第一次真跑；看 us/call 不看次数 |
+| `cart.membershipScan` | `CoasterCartServerMembership.scan` | 缓存命中仍做一次 `getBlockState` ⇒ N 车 = N 次世界读/tick |
+| `cart.reclassify` | `classify` | 稳态应趋 0；非 0 = dirty / ready-chunk 在抖 |
+| `rivet.reconcileLive` / `rivet.rivetsAndDirty` | `RivetPlotMembership` | 每 tick 全 sublevel + 三套 set 裁剪 + 新 record + 两个集合分配 |
+| `plot.scanBearingCells` | 块级扫描 | 稳态应极少；每 tick 都有 = 索引没兜住 |
+| `alloc` | 服务端线程分配率 | 「每 tick new record/set」的总账 |
+
+实现约定（三条都要守住）：
+
+1. **只读**：只有 `System.nanoTime()` 与计数器自增，不改参数、不改返回值、不短路；
+2. **便宜**：两次 `nanoTime` ≈ 40 ns；计数器是裸 `long`，跨线程丢精度不丢正确性；
+3. **安静**：每窗口一行，窗口内全零则不打印；`alloc` 用 `com.sun.management.ThreadMXBean`，
+   取不到就自动隐去，不报警。
+
+探针放在**独立 mixin config**（`required=false` + `defaultRequire=0`）并各带一个 `@Unique`
+锚点字段，由 `ProbeSelfCheck` 在启动时核对——「探针掉线」必须和「探针测得 0」可区分，否则默认开
+的探针会变成长期假数据。
+
+### 15.3 实测（2026-11-17，dev 专服）
+
+```
+self-check OK: 9/9 mixin targets active
+probe self-check OK: 3/3 probe mixins active
+probes[600t]: cart.reconcile 3618x 4.54ms 1.25us/call | rivet.reconcileLive 1800x 1.61ms 0.89us/call
+             | rivet.rivetsAndDirty 1800x 0.46ms 0.25us/call | alloc 0.43MB/s || total 11.01us/tick
+```
+
+空载世界稳态 **10–11 µs/tick**；`cart.readyChunks` 为 0 是因为该测试世界没有 sublevel
+（`run/world/sublevels` 只有一个空文件）。**真实存档的数字还没量**——这正是探针要解决的事，
+下一次进游戏后看那三行，再决定要不要为 `readyPlotChunkCount` 写补丁。
