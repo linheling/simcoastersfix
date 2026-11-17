@@ -10,14 +10,6 @@ authors="${mod_authors}"
 description='''${mod_description}'''
 logoFile="logo.png"
 
-[[mixins]]
-config="simcoastersfix.mixins.json"
-
-# Probe config: required=false + defaultRequire=0, so a future upstream that moves one of these
-# methods loses probe data instead of crashing the game. The probes are observation only.
-[[mixins]]
-config="simcoastersfix-probes.mixins.json"
-
 [[dependencies.${mod_id}]]
 modId="neoforge"
 versionRange="${neo_version_range}"
@@ -32,10 +24,9 @@ type="required"
 ordering="NONE"
 side="BOTH"
 
-# 1.5.0 targets 0.1.6 and only 0.1.6: the probes hook classes that version introduced, and the
-# remaining perf mixins were validated against its bytecode. A future 0.1.7 must be checked with
-# javap (or a runServer self-check) before this range is widened - 0.1.6 itself moved three
-# injection points that 1.4.1 relied on.
+# The blueprint layer is written against simulatedcoasters 0.1.6 (its package-private
+# RivetHostIndex / BalloonLoadReconciler / cart link NBT layout). Widen this only after checking a
+# new upstream against BLUEPRINT_COMPAT.md's acceptance log.
 [[dependencies.${mod_id}]]
 modId="simulatedcoasters"
 versionRange="[0.1.6,0.1.7)"
@@ -50,8 +41,9 @@ type="required"
 ordering="AFTER"
 side="BOTH"
 
-# Sable Photomancy is optional: with it installed this mod registers blueprint mappers so that
-# rivet hosts, balloon hosts and cart train couplings survive a save/paste round trip.
+# Sable Photomancy is what this mod bridges to. It stays optional so upgrading from the 1.x
+# performance patch cannot brick a game that does not have Photomancy installed; without it the mod
+# loads, logs one line and does nothing.
 [[dependencies.${mod_id}]]
 modId="sable_schematic_api"
 versionRange="[1.0.0,)"

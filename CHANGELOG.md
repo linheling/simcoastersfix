@@ -2,6 +2,41 @@
 
 > English release notes (for the CurseForge / Modrinth changelog field): [`CHANGELOG.en.md`](CHANGELOG.en.md)
 
+## 2.0.0 — 2026-11-17
+
+**范围收缩：删掉全部性能补丁与探针，只留 Sable Photomancy 蓝图兼容**
+
+原因：`simulatedcoasters 0.1.6` 把 1.x 补丁要修的东西自己修了，而且把剩下几条的注入点搬走或改名
+（详见 tag `archive-1.5.2-perf` 里的 `UPSTREAM-0.1.6.md`）。逐条核对后，性能部分已经没有保留价值：
+
+| 删除 | 依据 |
+|---|---|
+| `PlotScanSectionFilterMixin` | 0.1.6 的 `skipSection` 里是同一行 `maybeHas` |
+| `BearingScanThrottleMixin` / `RivetScanThrottleMixin` | 上游换成事件驱动成员索引 + `beginEnforcePass`，节流失去目标 |
+| `TrackSnapBroadcastGuardMixin` / `TrainLinkRestoreThrottleMixin` | 注入点被搬进 lambda / 改名 private，硬留会崩 |
+| `CurveHandleLengthCacheMixin` | 仍有效，但属于「性能补丁」，不在本次保留范围内 |
+| `CartLinkGuardMixin` + `CartMembership` + `MembershipRepair` | 随性能部分一起去掉 |
+| 热点探针（`probe/`、探针 mixin config） | 同上 |
+| `FixConfig` / `FixLimits` / `PatchSelfCheck` / 两个 mixin config | 不再需要 |
+
+保留：`blueprint/` 全部（`RivetHostBlueprintMapper`、`BalloonHostBlueprintMapper`、
+`CoasterBlueprintEvent`、`BlueprintRefs`、`CartTrainLinks`、`BlueprintCompat`），代码一行未改。
+
+其他变化：
+
+- 显示名 `Coaster Perf Fix (Unofficial)` → **`Coaster Blueprint Compat (Unofficial)`**，
+  modId 仍是 `simcoastersfix`（升级路径不断）。
+- 编译期依赖去掉 `libs/create.jar`。
+- 启动日志从「9 个注入点自检」变成一行 `blueprint compat armed` + 一行 Photomancy 检测结果。
+- 旧配置 `config/simcoastersfix-server.toml` 由新版本忽略，可以删掉。
+
+**性能补丁去哪了**：最后一个带全部优化的版本是 1.5.2，代码在 git tag `archive-1.5.2-perf`，
+产物是 `dist/simcoastersfix-1.5.2.jar`。
+
+**⚠ 升级警告**：2.0.0 不含 1.4.1 的「删除前重新裁决」守卫，而 0.1.6 的成员索引仍有误删连杆的
+回归（载入窗口里归类过的 sublevel 会被永久记成「不是车」）。存档里有连成列车的过山车时，
+装 2.0.0 前先备份，或继续用 1.5.2。需要的话可以把守卫单独作为 2.0.1 的正确性补丁加回来。
+
 ## 1.5.2 — 2026-11-17
 
 **让上游的成员索引自己纠正：守卫每拒绝一次，就把那条错误的负缓存踢掉**

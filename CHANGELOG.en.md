@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.0.0 — 2026-11-17
+
+**Scope cut: every performance patch and probe is gone; only the Sable Photomancy blueprint bridge remains**
+
+Why: `simulatedcoasters 0.1.6` fixed what the 1.x patches were written for, and moved or renamed the injection points of the rest (see `UPSTREAM-0.1.6.md` in the tag `archive-1.5.2-perf`). After checking each one, nothing performance-side was worth keeping:
+
+| Removed | Evidence |
+|---|---|
+| `PlotScanSectionFilterMixin` | 0.1.6's `skipSection` has the same `maybeHas` line |
+| `BearingScanThrottleMixin` / `RivetScanThrottleMixin` | upstream switched to event-driven member indexes + `beginEnforcePass`; the throttles lost their purpose |
+| `TrackSnapBroadcastGuardMixin` / `TrainLinkRestoreThrottleMixin` | call sites moved into a lambda / method renamed private; keeping them crashes |
+| `CurveHandleLengthCacheMixin` | still valid, but it is a performance patch and this release drops that category |
+| `CartLinkGuardMixin` + `CartMembership` + `MembershipRepair` | dropped with the rest |
+| Hotspot probes (`probe/`, probe mixin config) | same |
+| `FixConfig` / `FixLimits` / `PatchSelfCheck` / both mixin configs | no longer needed |
+
+Kept: all of `blueprint/` (`RivetHostBlueprintMapper`, `BalloonHostBlueprintMapper`, `CoasterBlueprintEvent`, `BlueprintRefs`, `CartTrainLinks`, `BlueprintCompat`), unchanged.
+
+Other changes:
+
+- Display name `Coaster Perf Fix (Unofficial)` → **`Coaster Blueprint Compat (Unofficial)`**; the mod id stays `simcoastersfix` so upgrades keep working.
+- `libs/create.jar` is no longer a compile dependency.
+- Startup logging is now one `blueprint compat armed` line plus the Photomancy detection result, instead of the nine-target self-check.
+- An old `config/simcoastersfix-server.toml` is ignored by 2.0.0 and can be deleted.
+
+**Where the performance patches went**: the last build with all of them is 1.5.2, preserved as git tag `archive-1.5.2-perf` and as `dist/simcoastersfix-1.5.2.jar`.
+
 ## 1.5.2 — 2026-11-17
 
 **Make upstream's membership index correct itself: every guard refusal evicts the wrong cached answer**
