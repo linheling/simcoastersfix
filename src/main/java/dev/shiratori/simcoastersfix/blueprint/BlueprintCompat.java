@@ -9,8 +9,9 @@ import dev.silvergold.simulatedcoasters.SimulatedCoastersBlocks;
  * Entry point for the Sable Photomancy bridge.
  *
  * <p>Everything in this package touches {@code sable_schematic_api} classes, so this class is only
- * ever loaded when that mod is present (see {@code Simcoastersfix#commonSetup}). Without Photomancy
- * the mod keeps working as the plain performance patch.</p>
+ * ever loaded when that mod is present (see {@code Simcoastersfix#commonSetup}). It registers two
+ * block mappers (rivet and balloon host references), the save/place event hook (cart train couplings)
+ * and the block cost rules that make the film printer charge for Coasters blocks.
  */
 public final class BlueprintCompat {
     private static boolean registered;
@@ -27,6 +28,7 @@ public final class BlueprintCompat {
             SableBlueprintMapperRegistry.register(SimulatedCoastersBlocks.RIVET_BE.get(), new RivetHostBlueprintMapper());
             SableBlueprintMapperRegistry.register(SimulatedCoastersBlocks.BALLOON_BE.get(), new BalloonHostBlueprintMapper());
             SableBlueprintEventRegistry.register(new CoasterBlueprintEvent());
+            CoasterBlockCostRules.register();
             Simcoastersfix.LOGGER.info(
                     "[{}] blueprint compatibility armed: rivet host, balloon host, cart train links",
                     Simcoastersfix.MODID);

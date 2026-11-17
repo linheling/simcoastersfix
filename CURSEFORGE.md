@@ -27,6 +27,12 @@ It registers two blueprint mappers and one `SableBlueprintEvent` hook through Ph
 
 The mod never modifies the Coasters jar and never touches gameplay code. See `BLUEPRINT_COMPAT.md` in the repository for the field-by-field design and the acceptance log.
 
+### Material cost (2.1.0)
+
+Photomancy's film printer charges materials with a one-line default rule: charge `block.asItem()`, charge nothing when it is air. Three Coasters blocks have no `BlockItem` — their items are plain `Item`s because the blocks are spawned through a sub-level rather than placed from the inventory — so printing a coaster cart, a rivet or a balloon used to cost **zero items**. 2.1.0 registers one "1 block = 1 item" cost rule per block through Photomancy's public cost-rule registry, matching the mod's own one-item-per-placement consumption.
+
+`coaster_track_material` is deliberately not covered: it has no item, and one `coaster_track` item places a whole bezier of track blocks, so per-block charging would overcharge by the curve resolution.
+
 ## Requirements
 
 - Minecraft 1.21.1, NeoForge 21.1.x

@@ -75,6 +75,43 @@ Simulated 恰好有三处数据是这么存的：
 这几条数字就是验收标准：`rivetSubLevels` 为 0 说明铆钉子层级根本没进蓝图
 （那是导出侧的问题，不在本层能修的范围）；`re-attached rivets` 为 0 说明贴出来了但没修上。
 
+## 材料成本：为什么打印曾经是免费的（2.1.0）
+
+Photomancy 的胶片打印机（`survival/filmprinter/BlueprintMaterialQuoteCompiler`）会遍历
+`blueprint.subLevels()` 里的每一个方块，交给 `BlueprintBlockCostRules.quotePlacement` 换成物品。
+默认规则只有一行：
+
+```java
+Item item = payload.state().getBlock().asItem();
+return item == Items.AIR ? CostQuote.empty(...) : CostQuote.of(new CostLine(...));
+```
+
+Coasters 的方块**大多没有 BlockItem**——物品是普通 `Item`，因为方块是走子层级生成、不从背包放：
+
+```java
+// SimulatedCoasters.java
+COASTER_CART = ITEMS.registerItem("coaster_cart", CoasterCartItem::new, ...);   // 不是 BlockItem
+RIVET        = ITEMS.registerItem("rivet", Item::new, ...);                      // 不是 BlockItem
+RED_BALLOON  = ITEMS.registerItem("red_balloon", Item::new, ...);                // 不是 BlockItem
+COASTER_ANCHORPOINT = ITEMS.registerSimpleBlockItem("coaster_anchorpoint", ...); // 这个有
+```
+
+所以 `asItem()` 全是 AIR ⇒ 报价为空 ⇒ 蓝图里草方块收钱、车厢/铆钉/气球一分不收。
+
+修法是用 Photomancy 公开的成本规则表（Create 机械、Copycats 的兼容也是这张表）：
+
+```java
+BlueprintBlockCostRules.register(block, rule);   // 1 方块 = 1 物品，CostTiming.IMMEDIATE_BLOCK
+```
+
+三条规则的 id 都用 `simcoastersfix:` 前缀，`quoteNbtLoad` 返回空（和默认规则一致）。
+数量口径对齐 mod 自己的消耗：`CoasterCartItem` 放一辆车 `shrink(1)`、`RivetPlacePayload` 一个铆钉
+`shrink(1)`、`BalloonAttachInteraction` 一个气球 `shrink(1)`。
+
+**未覆盖**：`coaster_track_material`。它继承 Create 的 `TrackBlock`，没有对应物品；而 1 个
+`coaster_track` 放的是一整段贝塞尔曲线（几十个轨道方块）。按方块收 = 几十倍超收，按段收需要
+蓝图保留「段」的边界，上游才有这个信息。
+
 ## 已知边界
 
 - **世界方块宿主的铆钉救不回来。** 蓝图只含子层级内容，普通世界方块不会被复制。
@@ -97,5 +134,7 @@ Simulated 恰好有三处数据是这么存的：
    期望：车厢仍是列车，连杆还在（日志 `cartLinks=N`）。
 3. 在子层级方块上放一个红气球 → 保存 → 粘贴。
    期望：气球贴在对应方块上，不是浮在半空。
-4. 只装性能补丁、不装 Photomancy 启动一次。
-   期望：正常启动，日志说 blueprint compatibility disabled。
+4. 不装 Photomancy 启动一次。
+   期望：正常启动，日志说 `blueprint compatibility disabled`。
+5. 蓝图里放一节车厢 → 胶片打印机看材料清单。
+   期望：出现 `coaster_cart`，数量 = 蓝图里的车厢方块数（2.1.0 之前这一项是 0）。

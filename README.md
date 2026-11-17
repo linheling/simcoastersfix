@@ -41,6 +41,24 @@ Photomancy 的蓝图只搬运「子层级里的方块状态 + 方块实体 NBT�
 `SableBlueprintEvent` 钩子，在保存时把引用写进蓝图、在粘贴后把它们重映射到新 id 上。
 原理、字段与验收日志见 [`BLUEPRINT_COMPAT.md`](BLUEPRINT_COMPAT.md)。
 
+## 材料成本（2.1.0）
+
+蓝图打印（胶卷/胶片）会按「方块 → 物品」算材料，而这条链的默认规则是
+`state.getBlock().asItem()`，遇到空气就不收钱。Coasters 有三个方块**没有 BlockItem**
+（物品是普通 `Item`，方块走子层级生成，不从背包放）：
+
+| 方块 | 收的物品 | 依据 |
+|---|---|---|
+| `coaster_cart`（方块） | `coaster_cart` | `CoasterCartItem` 放置后 `shrink(1)` |
+| `rivet`（方块） | `rivet` | `RivetPlacePayload` `shrink(1)` |
+| `red_balloon`（方块） | `red_balloon` | `BalloonAttachInteraction` `shrink(1)` |
+
+2.1.0 用 Photomancy 公开的 `BlueprintBlockCostRules.register(block, rule)` 给这三个方块补上
+「1 方块 = 1 物品」，于是打印不再白嫖它们。`coaster_anchorpoint` 本身有 BlockItem，默认规则就收钱。
+
+**未覆盖**：`coaster_track_material`（轨道方块）。它没有物品，而 1 个 `coaster_track` 放的是一整段
+贝塞尔曲线——按方块收会几十倍超收，得在「一段轨道」的粒度上做，属上游的活。
+
 ## 安装
 
 - 客户端/服务端都装（蓝图工具在客户端，粘贴在服务端；单人游戏两者同一进程）。

@@ -2,6 +2,43 @@
 
 > English release notes (for the CurseForge / Modrinth changelog field): [`CHANGELOG.en.md`](CHANGELOG.en.md)
 
+## 2.1.0 — 2026-11-17
+
+**修复：蓝图打印把 Coasters 的方块当成免费的（材料清单里只有草方块这类原版方块）**
+
+现象：蓝图里存了草方块和过山车车厢，胶卷/材料清单只认得草方块；打印出来两样都在——
+车厢那部分**零物品消耗**。
+
+原因：Photomancy 的默认成本规则只有一行——收 `state.getBlock().asItem()`，`asItem()` 是空气就不收：
+
+```java
+Item item = payload.state().getBlock().asItem();
+return item == Items.AIR ? CostQuote.empty(...) : CostQuote.of(new CostLine(...));
+```
+
+而 Coasters 有三个方块**没有注册 BlockItem**（物品是普通 `Item`，因为方块不是从背包放的，
+是走子层级生成的）：
+
+| 方块 | 对应物品 | 玩家实际消耗 |
+|---|---|---|
+| `simulatedcoasters:coaster_cart` | `coaster_cart` | `CoasterCartItem` 放置后 `shrink(1)`（两条路径各一处） |
+| `simulatedcoasters:rivet` | `rivet` | `RivetPlacePayload` 放完 `shrink(1)` |
+| `simulatedcoasters:red_balloon` | `red_balloon` | `BalloonAttachInteraction` 吸附后 `shrink(1)` |
+
+于是 `asItem()` 全是 AIR → 默认规则返回空报价 → 打印免费。
+
+修法：用 Photomancy 公开的成本规则注册表 `BlueprintBlockCostRules.register(block, rule)` 给三个方块
+各注册一条「1 方块 = 1 该物品」的规则。这和 mod 自己的消耗逻辑（一车一物品、一铆钉一物品、
+一气球一物品）是一一对应的。Photomancy 自带的 Create 机械与 Copycats 兼容也是走这个入口。
+
+- `coaster_anchorpoint` 不用管：它是唯一用 `registerSimpleBlockItem` 注册的，默认规则本来就收钱。
+- **未覆盖**：`coaster_track_material`。它没有物品，而 1 个 `coaster_track` 放的是一整段贝塞尔曲线
+  （几十个轨道方块）——按方块收会几十倍超收。这一项需要在「一段轨道」这个粒度上做，属上游的活。
+- 启动日志新增一行：`blueprint cost rules armed: 3/3 Coasters blocks now charge their item`。
+
+**注意**：2.1.0 仍然**不含** 1.4.1 那条连杆守卫（见 2.0.0 的警告）。存档里有连成列车的过山车时，
+先备份再装。
+
 ## 2.0.0 — 2026-11-17
 
 **范围收缩：删掉全部性能补丁与探针，只留 Sable Photomancy 蓝图兼容**

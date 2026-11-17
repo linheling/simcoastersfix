@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.1.0 — 2026-11-17
+
+**Fixed: the film printer treated Coasters blocks as free (the material list only showed vanilla blocks)**
+
+Symptom: a blueprint containing grass and a coaster cart listed only the grass; printing placed both, with **zero items** charged for the cart.
+
+Cause: Photomancy's default cost rule is one line — charge `state.getBlock().asItem()`, and charge nothing when that is air:
+
+```java
+Item item = payload.state().getBlock().asItem();
+return item == Items.AIR ? CostQuote.empty(...) : CostQuote.of(new CostLine(...));
+```
+
+Coasters registers three of its blocks **without a `BlockItem`** (the item is a plain `Item` because the block is spawned through a sub-level, never placed from the inventory):
+
+| Block | Item | What the player actually spends |
+|---|---|---|
+| `simulatedcoasters:coaster_cart` | `coaster_cart` | `CoasterCartItem` shrinks by one per cart (both placement paths) |
+| `simulatedcoasters:rivet` | `rivet` | `RivetPlacePayload` shrinks by one per rivet |
+| `simulatedcoasters:red_balloon` | `red_balloon` | `BalloonAttachInteraction` shrinks by one per balloon |
+
+So `asItem()` is air for all three, the default rule quotes nothing, and printing is free.
+
+Fix: register one "1 block = 1 item" cost rule per block through Photomancy's public `BlueprintBlockCostRules.register(block, rule)` registry — the same door its own Create-contraption and Copycats compat modules use. The mapping matches the mod's own one-item-per-placement consumption.
+
+- `coaster_anchorpoint` needs nothing: it is the only block registered with `registerSimpleBlockItem`, so the default rule already charges it.
+- **Not covered**: `coaster_track_material`. It has no item at all, and one `coaster_track` item places a whole bezier of track blocks — charging per block would overcharge by the curve resolution. That one needs a piece-level rule upstream.
+- New startup line: `blueprint cost rules armed: 3/3 Coasters blocks now charge their item`.
+
+**Note**: 2.1.0 still does **not** include the 1.4.1 cart-link guard (see the 2.0.0 warning). Back up saves with coupled coaster trains before installing.
+
 ## 2.0.0 — 2026-11-17
 
 **Scope cut: every performance patch and probe is gone; only the Sable Photomancy blueprint bridge remains**
