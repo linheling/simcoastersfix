@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.2 — 2026-11-17
+
+**Make upstream's membership index correct itself: every guard refusal evicts the wrong cached answer**
+
+The 1.5.1 session pinned the root cause: `cart.reclassify` reported **1008 calls in the load window and exactly zero** in the following eleven 30-second windows, while the guard refused **22,560** teardowns across 130 carts (upstream `unlinked`: 0). In other words 0.1.6 classified those 130 sub-levels once — while their plots were still being populated — and never looked again, because the only re-check condition (`readyChunkCount`) does not change when the chunk object existed all along.
+
+Change: when the guard refuses, it also calls `CoasterCartServerMembership.invalidate(sub)` once, so upstream rescans the plot on the next query (which now has content and answers "cart"). After one repair the cart stops being misjudged, and the ~54 refusals per second stop with it.
+
+- The method is **package-private** and so is its class, so there is no public door: reflection, resolved once and cached as a `MethodHandle`. Any failure logs one WARN and degrades to "no index repair, guard unchanged".
+- New switch `repairCartMembershipIndex` (default true).
+- Expected on the next launch: `repaired the cart membership index for N sub-levels` in the log, `kept cart-train couplings` dropping from ~215 lines/minute to ~0, and `plot.scanBearingCells` dropping from 78 µs/tick to near zero.
+- The reflection path has **not** been verified in-game yet — per this project's rule, compiling does not count. If the upstream module refuses access you will see one `#invalidate is not reachable` WARN and the guard still works.
+
 ## 1.5.1 — 2026-11-17
 
 **Live measurement reverted one of 1.5.0's defaults: `protectCartLinks` must stay on**

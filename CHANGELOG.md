@@ -2,6 +2,26 @@
 
 > English release notes (for the CurseForge / Modrinth changelog field): [`CHANGELOG.en.md`](CHANGELOG.en.md)
 
+## 1.5.2 — 2026-11-17
+
+**让上游的成员索引自己纠正：守卫每拒绝一次，就把那条错误的负缓存踢掉**
+
+1.5.1 的会话日志把病根钉死了：`cart.reclassify` 在载入窗口是 **1008 次**，之后 11 个 30 秒窗口
+**全是 0**；同一时间守卫拒绝了 **22,560 次**（130 节车厢，上游 `unlinked` 0 次）。也就是说
+0.1.6 把这 130 个 sublevel 在「plot 还没填充」时归类了一次，此后**永远不会再看第二眼**——
+`readyChunkCount` 不变化就不重判，而 chunk 对象早在、内容晚到时它确实不变。
+
+改动：守卫拒绝时顺手调一次 `CoasterCartServerMembership.invalidate(sub)`，让上游下一问重扫 plot
+（现已有内容，答案自然是 cart）。一次修复之后这节车就不再被误判，重复的 54 次/秒拒绝随之消失。
+
+- 该方法是 **package-private**，类本身也是 package-private，没有公开入口 → 用反射（一次解析、
+  缓存 `MethodHandle`）；任何失败都只 WARN 一次并降级为「不修索引，守卫照旧」。
+- 新增开关 `repairCartMembershipIndex`（默认 true）。
+- 预期效果（下一次启动可以验）：日志出现 `repaired the cart membership index for N sub-levels`，
+  `kept cart-train couplings` 从每分钟 ~215 行掉到 ~0，`plot.scanBearingCells` 从 78 µs/tick 掉到接近 0。
+- 本版**没有实机验证过反射通道**——按本项目的规矩，编译通过不算数。如果上游的模块不给访问，
+  会留一行 `#invalidate is not reachable` 的 WARN，守卫仍然生效。
+
 ## 1.5.1 — 2026-11-17
 
 **实测把 1.5.0 的一个默认值打回去了：`protectCartLinks` 必须默认开**

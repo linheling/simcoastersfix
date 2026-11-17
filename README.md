@@ -91,6 +91,7 @@ balloonPhysicsMemo               = true  # 物理管线速度读取去重
 trainLinkTickMemo                = true  # 连杆 tick 内重复查询去重
 curveHandleLengthCache           = true  # 贝塞尔手柄长度缓存
 protectCartLinks                 = true  # 删除前重新裁决（0.1.6 仍会缓存错误的「不是车」）
+repairCartMembershipIndex        = true  # 拒绝后让上游重判，把错误的负缓存踢掉（1.5.2）
 hotspotProbes                    = true  # 热点探针
 hotspotProbeIntervalTicks        = 600   # 探针窗口（600 = 30 秒）
 ```

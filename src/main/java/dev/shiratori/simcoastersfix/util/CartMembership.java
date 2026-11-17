@@ -170,6 +170,10 @@ public final class CartMembership {
         if (verdict == Verdict.NOT_CART) {
             return false;
         }
+        if (verdict == Verdict.CART && partner instanceof ServerSubLevel serverPartner) {
+            // The block is physically there, so upstream's cached answer is wrong: make it look again.
+            MembershipRepair.heal(serverPartner);
+        }
         refuse("isDefunctLinkPartner", partner, verdict);
         return true;
     }
@@ -187,6 +191,9 @@ public final class CartMembership {
         Verdict verdict = verdict(cart);
         if (verdict == Verdict.NOT_CART) {
             return false;
+        }
+        if (verdict == Verdict.CART) {
+            MembershipRepair.heal(cart);
         }
         refuse("onCartRemoved", cart, verdict);
         return true;

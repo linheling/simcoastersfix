@@ -82,6 +82,16 @@ public final class FixConfig {
                     "persisted NBT copy).")
             .define("protectCartLinks", true);
 
+    public static final ModConfigSpec.BooleanValue REPAIR_CART_MEMBERSHIP_INDEX = BUILDER
+            .comment("After refusing a teardown, make upstream re-classify the sub-level.",
+                    "0.1.6 caches 'not a cart' for a sub-level classified before its plot was populated,",
+                    "and only re-checks when the ready-chunk count changes - which it does not when the",
+                    "chunk object already existed. Measured: 1008 classifications during world load, zero",
+                    "afterwards, while 130 real carts were reported as defunct link partners. Repairing the",
+                    "entry costs one plot scan and removes the repeated refusals for that cart.",
+                    "Observation-free and reversible: no effect unless the guard also fires.")
+            .define("repairCartMembershipIndex", true);
+
     public static final ModConfigSpec.BooleanValue HOTSPOT_PROBES = BUILDER
             .comment("Log one line per window with the cost of the hot spots simulatedcoasters 0.1.6 introduced:",
                     "the per-tick membership reconcile, the ready-chunk count, the membership lookup that",
@@ -110,18 +120,20 @@ public final class FixConfig {
         FixLimits.balloonPhysicsMemo = get(BALLOON_PHYSICS_MEMO, FixLimits.balloonPhysicsMemo);
         FixLimits.curveHandleLengthCache = get(CURVE_HANDLE_LENGTH_CACHE, FixLimits.curveHandleLengthCache);
         FixLimits.protectCartLinks = get(PROTECT_CART_LINKS, FixLimits.protectCartLinks);
+        FixLimits.repairCartMembershipIndex = get(REPAIR_CART_MEMBERSHIP_INDEX, FixLimits.repairCartMembershipIndex);
         Probes.enabled = get(HOTSPOT_PROBES, Probes.enabled);
         Probes.flushIntervalTicks = get(HOTSPOT_PROBE_INTERVAL, Probes.flushIntervalTicks);
         Simcoastersfix.LOGGER.info(
                 "[{}] limits: bearingTtl(cart/empty)={}/{}, rivet={}, selfHost={},"
                         + " balloonRestore={}({}), balloonMemo={}, balloonPhysicsMemo={}, trainLinkMemo={},"
-                        + " curveHandleLengthCache={}, protectCartLinks={}, probes={}({})",
+                        + " curveHandleLengthCache={}, protectCartLinks={}, repairMembership={}, probes={}({})",
                 Simcoastersfix.MODID,
                 FixLimits.bearingTtlWithCart, FixLimits.bearingTtlEmpty,
                 FixLimits.rivetIntervalTicks, FixLimits.selfHostIntervalTicks,
                 FixLimits.balloonRestoreThrottle, FixLimits.balloonRestoreIntervalTicks,
                 FixLimits.balloonTickMemo, FixLimits.balloonPhysicsMemo, FixLimits.trainLinkTickMemo,
                 FixLimits.curveHandleLengthCache, FixLimits.protectCartLinks,
+                FixLimits.repairCartMembershipIndex,
                 Probes.enabled, Probes.flushIntervalTicks);
     }
     private static int get(ModConfigSpec.IntValue value, int fallback) {

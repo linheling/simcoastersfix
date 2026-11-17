@@ -56,6 +56,14 @@ public final class FixLimits {
      */
     public static boolean protectCartLinks = true;
 
+    /**
+     * When the guard refuses a teardown because a fresh scan found the cart, also tell upstream to
+     * forget its cached answer ({@code MembershipRepair}). One repair per mis-cached sub-level turns
+     * a false "not a cart" into a correct one, which is what stops the same 130 carts being refused
+     * ~54 times a second for the whole session.
+     */
+    public static boolean repairCartMembershipIndex = true;
+
     private FixLimits() {
     }
 }

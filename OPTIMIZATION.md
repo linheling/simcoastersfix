@@ -778,3 +778,28 @@ if (cached != null && !state.dirty.contains(id)) {
   10,240 次误判收敛成 78 次、并回收那 78 µs/tick。需要 `CoasterCartServerMembership.invalidate`
   的访问通道（`@Invoker` mixin），属于新机制，先记 TODO 不急着上。
 
+### 15.6 1.5.2：把那条负缓存踢掉（待实机验证）
+
+第二次会话（1.5.1，11:49–11:56）把「永不重判」钉死了：
+
+| 指标 | 载入窗口 | 之后 11 个窗口 |
+|---|---|---|
+| `cart.reclassify` | **1008** | **0** |
+| `plot.scanBearingCells` | 3887 次 / 113 ms | 1716 次 / 47 ms（全是守卫的重新扫描） |
+| 守卫拒绝 | — | 22,560 次 / 130 节车厢 / 上游 `unlinked` 0 |
+| `cart.readyChunks` | 589,590 | 626,400（1044 次/tick，0.268 ms/tick） |
+| 合计 | 827 µs/tick | **663 µs/tick** |
+
+130 个 UUID 里有 68 个和上一次会话重合、62 个是新面孔——每次载入都会有一批车在
+「plot 未填充」时被归类，落在哪批是随机的，但一旦落下就永久错。
+
+修法（1.5.2）：守卫拒绝时调一次 `invalidate`。访问方式是**反射**而不是 `@Invoker`——
+
+- `CoasterCartServerMembership` 与 `invalidate(ServerSubLevel)` 都是 package-private，没有公开门；
+- 反射失败只降级（守卫照旧），mixin 失败会让整个 mod 崩，两者代价不对等；
+- 解析一次、缓存 `MethodHandle`，稳态成本 = 一次 invoke，且只在拒绝路径上。
+
+预期（下次启动验证）：`repaired the cart membership index for N sub-levels` 出现；
+`plot.scanBearingCells` 从 78 µs/tick 掉到 ≈0；守卫日志从 215 行/分钟掉到 0。
+
+

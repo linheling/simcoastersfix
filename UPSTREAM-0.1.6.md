@@ -292,9 +292,9 @@ $env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-21.0.9.10-hotspot"
 于是永久错误。`entryFor` 命中缓存时对非 cart 条目直接返回，连 `getBlockState` 都不做。
 
 - 1.5.1 已把 `protectCartLinks` 改回默认 **true**，并把这段证据写进注释与 CHANGELOG。
-- 可选后续（未做）：守卫拒绝时顺手 invalidate 该 sublevel，让上游重判——能把 10,240 次误差
-  收敛成 78 次，并回收那 ~78 µs/tick。需要给 `CoasterCartServerMembership.invalidate`
-  开一个 `@Invoker` 通道，记 TODO。
+- 1.5.2 已加上自愈：守卫拒绝时反射调用一次 `CoasterCartServerMembership.invalidate(sub)`，
+  让上游下一问重扫。第二次会话的日志（`cart.reclassify` 1008 → 0、22,560 次拒绝 / 130 车）
+  是这次改动的依据；**反射通道本身还没实机验证**，失败只降级不崩。
 
 ## 附：本次留在 `work/` 的东西（可删）
 
