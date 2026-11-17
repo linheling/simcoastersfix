@@ -2,6 +2,53 @@
 
 > English release notes (for the CurseForge / Modrinth changelog field): [`CHANGELOG.en.md`](CHANGELOG.en.md)
 
+## 1.5.1 — 2026-11-17
+
+**实测把 1.5.0 的一个默认值打回去了：`protectCartLinks` 必须默认开**
+
+现象：1.5.0 装进真实存档（0.1.6 + 1.5.0，探针开）。30 秒窗口里守卫生效 **10,240 次**、涉及
+**78 节车厢**、上游 `unlinked` **0 次**——也就是说，如果没有这个守卫，这 78 条耦合会在载入时被上游
+从车厢 NBT 里删掉。
+
+原因：0.1.6 的 `CoasterCartServerMembership` 仍会把「plot 还没填充完时被归类过的 sublevel」
+**永久缓存成「不是车」**。它唯一的重判条件是 `readyChunkCount` 变化，而 chunk 对象早就在、
+只是内容还没写进去时，这个计数不会变：
+
+```java
+int readyChunks = CoasterCartPlotScan.readyPlotChunkCount(sub.getPlot());
+boolean needsClassify = existing == null || dirtySnapshot.contains(id)
+        || !existing.isCart() && existing.readyChunkCount != readyChunks;
+```
+
+`entryFor` 的缓存命中分支对非 cart 条目直接返回（`!cached.isCart() || …` 短路），所以这些条目
+再也不会被重扫；`isDefunctLinkPartner` 读的正是它 → 每 100 tick 的恢复 pass 都会判定「这节车没了」。
+
+改动：
+
+- `protectCartLinks` 默认 **true**（代码、配置注释、README 同步改），并把上面的证据写进注释。
+- 没有别的行为改动；1.5.0 的删除与默认值其余部分不变。
+
+**探针实测**（同一会话，600 tick/窗口，取三个稳定窗口）：
+
+| 计数项 | 调用/窗口 | 总耗时 | 归一化 |
+|---|---|---|---|
+| `cart.readyChunks` | 575,000 | 130 ms | **958 次/tick，0.22 ms/tick** |
+| `cart.reconcile` | 5,424 | 115 ms | 9 次/tick，0.20 ms/tick |
+| `cart.membershipScan` | 2,325 | 2.2 ms | 3.7 µs/tick |
+| `cart.reclassify` | 9 | ~0 | 稳态几乎不重判（这正是上文的病根） |
+| `rivet.reconcileLive` | 2,400 | 34.5 ms | 4 次/tick，58 µs/tick |
+| `rivet.rivetsAndDirty` | 2,400 | 6.8 ms | 4 次/tick，11 µs/tick |
+| `plot.scanBearingCells` | 1,599 | 47.0 ms | 2.7 次/tick，78 µs/tick（**其中大部分是守卫的重新扫描**） |
+| `alloc` | — | — | 服务端线程 ~210 MB/s |
+| 合计 | — | — | **~560 µs/tick** |
+
+结论：0.1.6 的成员索引 pass 约 **0.2 ms/tick**，而它几乎全部花在 `readyPlotChunkCount` 上
+（每个存活 sublevel 每 tick 一次，≈958 次）。这是**唯一被证实的 0.1.6 新增热点**，但只有约
+0.4% 的 tick 预算，且没有安全的局部修法（那个计数正是「plot 何时填充完」的检测手段，属上游的活）。
+守卫的重新扫描约 78 µs/tick —— 代价来自上游那个错误的负缓存，不是我们自找的。
+
+原始日志（1.3 MB，含全部探针窗口与 652 行守卫记录）留在 `work/client-probe-20261117.log`。
+
 ## 1.5.0 — 2026-11-17
 
 **适配 simulatedcoasters 0.1.6：删掉 3 个已失去目标的混入，新增默认开启的热点探针**

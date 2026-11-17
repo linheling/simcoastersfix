@@ -43,11 +43,18 @@ public final class FixLimits {
     public static boolean curveHandleLengthCache = true;
 
     /**
-     * Off by default in 1.5.0: with the bearing TTL at 1 tick there is no stale negative to protect
-     * against, and 0.1.6's membership index already treats "plot not populated yet" as unknown.
-     * Turn it back on if you raise {@link #bearingTtlWithCart} / {@link #bearingTtlEmpty}.
+     * On by default, and 1.5.1 had to put it back there.
+     *
+     * <p>1.5.0 assumed 0.1.6's membership index made this redundant. A live session proved the
+     * opposite: 10,240 refusals across 78 carts, zero upstream unlinks, and the index never
+     * self-corrected (see {@code OPTIMIZATION.md} &sect;15.4). A sub-level classified before its
+     * plot was populated is cached as "not a cart" forever, because the only re-check condition is
+     * {@code readyChunkCount}, which does not change when a chunk object already existed.
+     *
+     * <p>So the guard stays on: it re-scans before anything destructive, and only ever runs on the
+     * teardown path.
      */
-    public static boolean protectCartLinks = false;
+    public static boolean protectCartLinks = true;
 
     private FixLimits() {
     }

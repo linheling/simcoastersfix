@@ -74,11 +74,13 @@ public final class FixConfig {
 
     public static final ModConfigSpec.BooleanValue PROTECT_CART_LINKS = BUILDER
             .comment("Keep cart-train couplings when a cart is merely unobservable.",
-                    "Off by default in 1.5.0: with the bearing scan TTL at 1 tick there is no stale negative",
-                    "to guard against, and simulatedcoasters 0.1.6's membership index already refuses to",
-                    "answer 'gone' for a plot that has not been populated yet.",
-                    "Turn this on if you raise bearingScanTtlTicks* above ~2.")
-            .define("protectCartLinks", false);
+                    "On by default. 0.1.6 still caches a sub-level as 'not a cart' when it is classified",
+                    "before its plot is populated, and only re-checks when the ready-chunk count changes -",
+                    "which it does not when the chunk object already existed. A live session showed the",
+                    "guard refusing 10,240 teardowns across 78 carts with zero upstream unlinks.",
+                    "Turning this off makes the guard let upstream delete those couplings (and their",
+                    "persisted NBT copy).")
+            .define("protectCartLinks", true);
 
     public static final ModConfigSpec.BooleanValue HOTSPOT_PROBES = BUILDER
             .comment("Log one line per window with the cost of the hot spots simulatedcoasters 0.1.6 introduced:",

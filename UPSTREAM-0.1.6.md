@@ -267,6 +267,35 @@ $env:JAVA_HOME = "C:\Program Files\Microsoft\jdk-21.0.9.10-hotspot"
 > `run/world` 与 `run/mods` 在测试前后各备份了一份到 `work/world-backup`、`work/runmods-backup`，
 > 测完已还原；`build.gradle` / `mixins.json` / `src` 工作区现在是干净状态（`git status` 为空）。
 
+## 11. 实机探测结果（2026-11-17 11:40–11:43，1.5.0 + 0.1.6）
+
+真实存档、≈958 个存活 sublevel，600 tick 窗口稳态：
+
+| 计数项 | 归一化 | 判读 |
+|---|---|---|
+| `cart.readyChunks` | **958 次/tick，0.226 ms/tick** | §9 假设①被证实：每个存活 sublevel 每 tick 无条件遍历 plot chunks，是 0.1.6 唯一被证实的新增热点（≈0.45% tick 预算，随 sublevel 数线性增长） |
+| `cart.reconcile` | 9 次/tick，0.199 ms/tick | 与上一行是同一段工作的内外层计时，**不要相加** |
+| `cart.membershipScan` | 3.7 µs/tick | 假设③量级很小，可以放弃 |
+| `cart.reclassify` | 9 次/窗口 | 几乎不重判 → 正是 §11.1 的病根 |
+| `rivet.reconcileLive` + `rivetsAndDirty` | 76 µs/tick | 假设②量级中等，可接受 |
+| `plot.scanBearingCells` | 2.7 次/tick，80 µs/tick | 大部分是守卫在纠正上游的错误负缓存 |
+| `alloc` | ~209 MB/s | 待查（与探针无关；服务端线程 10 MB/tick，量级值得单独开一轮 JFR） |
+
+### 11.1 新发现的上游回归：成员索引的负结果永不重判
+
+1.5.0 曾把 `protectCartLinks` 默认关掉，理由是「0.1.6 的成员索引已经精确」。**实测推翻了这个判断**：
+一个 30 秒窗口里守卫拒绝 **10,240 次**拆卸、涉及 **78 节车厢**，上游 `unlinked` 0 次——没有守卫，
+这 78 条耦合会在载入时被从车厢 NBT 删掉，即 1.4.1 那个 bug 的新形态。
+
+根因：`CoasterCartServerMembership` 会把「plot 还没填充完时归类过」的 sublevel 缓存成非 cart，
+而重判条件只有 `readyChunkCount != readyChunks`；chunk 对象早就存在、内容晚到时这个数不变，
+于是永久错误。`entryFor` 命中缓存时对非 cart 条目直接返回，连 `getBlockState` 都不做。
+
+- 1.5.1 已把 `protectCartLinks` 改回默认 **true**，并把这段证据写进注释与 CHANGELOG。
+- 可选后续（未做）：守卫拒绝时顺手 invalidate 该 sublevel，让上游重判——能把 10,240 次误差
+  收敛成 78 次，并回收那 ~78 µs/tick。需要给 `CoasterCartServerMembership.invalidate`
+  开一个 `@Invoker` 通道，记 TODO。
+
 ## 附：本次留在 `work/` 的东西（可删）
 
 | 路径 | 内容 |

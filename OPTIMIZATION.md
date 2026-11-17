@@ -703,7 +703,7 @@ public boolean maybeHas(Predicate<T> p) { return true; }
 锚点字段，由 `ProbeSelfCheck` 在启动时核对——「探针掉线」必须和「探针测得 0」可区分，否则默认开
 的探针会变成长期假数据。
 
-### 15.3 实测（2026-11-17，dev 专服）
+### 15.3 空载基线（2026-11-17，dev 专服）
 
 ```
 self-check OK: 9/9 mixin targets active
@@ -713,5 +713,68 @@ probes[600t]: cart.reconcile 3618x 4.54ms 1.25us/call | rivet.reconcileLive 1800
 ```
 
 空载世界稳态 **10–11 µs/tick**；`cart.readyChunks` 为 0 是因为该测试世界没有 sublevel
-（`run/world/sublevels` 只有一个空文件）。**真实存档的数字还没量**——这正是探针要解决的事，
-下一次进游戏后看那三行，再决定要不要为 `readyPlotChunkCount` 写补丁。
+（`run/world/sublevels` 只有一个空文件）。这个数字只能当「探针本身几乎不花钱」的证据，
+不能当结论。
+
+### 15.4 真实存档实测（2026-11-17 11:40–11:43，1.5.0）
+
+环境：玩家实例 1.21.1 / NeoForge 21.1.265 / Java 25 / simulatedcoasters 0.1.6 + 1.5.0，
+约 **958 个存活 sublevel**（`readyChunks` 每趟 958 次），配置仍是 1.4.1 的旧值
+（TTL 40/100、rivet 30/20、`protectCartLinks=true`）。原始日志：`work/client-probe-20261117.log`。
+
+| 计数项 | 调用/窗口 | 总计 | 归一化 | 备注 |
+|---|---|---|---|---|
+| `cart.readyChunks` | 574,851 | 135.5 ms | **958/tick，0.226 ms/tick** | 每个存活 sublevel 每 tick 一次 |
+| `cart.reconcile` | 5,424 | 119.2 ms | 9.0/tick，0.199 ms/tick | 与 `readyChunks` 是同一段工作的内外层，**不要相加** |
+| `cart.membershipScan` | 2,325 | 2.2 ms | 3.9/tick，3.7 µs/tick | 缓存命中仍有一次 `getBlockState` |
+| `cart.reclassify` | 9 | ~0 | — | **几乎不重判 = 病根**（见 §15.5） |
+| `rivet.reconcileLive` | 2,400 | 38.1 ms | 4/tick，63.6 µs/tick | |
+| `rivet.rivetsAndDirty` | 2,400 | 7.2 ms | 4/tick，12.1 µs/tick | |
+| `plot.scanBearingCells` | 1,599 | 48.1 ms | 2.7/tick，80 µs/tick | **大部分是守卫的重新扫描** |
+| `alloc` | — | — | ~209 MB/s | 服务端线程；与探针无关（探针只 `nanoTime`） |
+| 合计 | — | — | **~560 µs/tick** | |
+
+判读：
+
+1. **`readyPlotChunkCount` 是唯一被证实的 0.1.6 新增热点**：0.226 ms/tick，≈0.45% 的 50 ms tick
+   预算。量级不大，但它跟存活 sublevel 数线性相关——sublevel 翻倍它就翻倍，而它对
+   「已知是 cart」的条目完全无用（cart 的重效验走 `entryFor` 的 `getBlockState`）。
+2. **没有安全的局部修法**：把计数塞进 `!existing.isCart() && …` 也只省下 40/958；真正的修法是
+   让 plot 填充完成时**发事件**去 invalidate，而不是每 tick 轮询计数——那是上游的数据结构改动。
+   所以 1.5.1 不动它，只留数字。
+3. **守卫的开销是被上游的 bug 逼出来的**：`plot.scanBearingCells` 78 µs/tick 里大部分是
+   `CartMembership.verdict()` 的重新扫描（每 tick 2.7 次 × 30 µs）。
+
+### 15.5 顺带抓到的上游回归：负缓存永不重判
+
+1.5.0 把 `protectCartLinks` 默认改成 false，理由是「0.1.6 的成员索引已经精确」。
+**实测 30 秒窗口里守卫拒绝了 10,240 次拆卸、涉及 78 节车厢，上游 `unlinked` 0 次**——
+也就是说没有这个守卫，这 78 条耦合会在载入时被从 NBT 删掉（就是 1.4.1 那个 bug 的新形态）。
+
+根因在 `CoasterCartServerMembership`：
+
+```java
+int readyChunks = CoasterCartPlotScan.readyPlotChunkCount(sub.getPlot());
+boolean needsClassify = existing == null || dirtySnapshot.contains(id)
+        || !existing.isCart() && existing.readyChunkCount != readyChunks;
+...
+// entryFor 命中缓存时：
+if (cached != null && !state.dirty.contains(id)) {
+    BlockPos rep = cached.scan.representative();
+    if (!cached.isCart() || rep != null && level.getBlockState(rep).is(bearingBlock)) return cached;
+}
+```
+
+非 cart 条目走 `!cached.isCart()` 短路，**连 `getBlockState` 都不做，直接返回「不是车」**；
+唯一能把它翻过来的条件是 `readyChunkCount` 变化，而 chunk 对象早就存在、内容晚到时这个数不变。
+`cart.reclassify ≈ 9/窗口` 正是这个推断的实测面。
+
+结论与动作：
+
+- 1.5.1 把 `protectCartLinks` 默认改回 **true**，注释里写明证据；
+- 读法上记住：「上游说不是车」≠「车真的没了」。删除型判断必须绕开缓存重新裁决，这条 1.4.1 的
+  教训在 0.1.6 上**依然成立**；
+- 可选的后续（未做）：守卫拒绝时顺手 `invalidate` 该 sublevel，让上游下一次重判——能把
+  10,240 次误判收敛成 78 次、并回收那 78 µs/tick。需要 `CoasterCartServerMembership.invalidate`
+  的访问通道（`@Invoker` mixin），属于新机制，先记 TODO 不急着上。
+

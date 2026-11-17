@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.5.1 — 2026-11-17
+
+**Live measurement reverted one of 1.5.0's defaults: `protectCartLinks` must stay on**
+
+Symptom: 1.5.0 in a real save (0.1.6 + 1.5.0, probes on). One 30-second window logged **10,240 guard refusals across 78 carts** and **zero** upstream `unlinked` — i.e. without the guard those 78 couplings would have been deleted from the carts' NBT on load.
+
+Cause: `CoasterCartServerMembership` in 0.1.6 still caches a sub-level as "not a cart" **permanently** when it was classified before its plot was populated. The only re-classification condition is a change in `readyChunkCount`, and that does not change when the chunk object already exists but its contents are still being written:
+
+```java
+int readyChunks = CoasterCartPlotScan.readyPlotChunkCount(sub.getPlot());
+boolean needsClassify = existing == null || dirtySnapshot.contains(id)
+        || !existing.isCart() && existing.readyChunkCount != readyChunks;
+```
+
+`entryFor` returns a cached non-cart entry immediately (`!cached.isCart() || …` short-circuits), so those entries are never re-scanned; `isDefunctLinkPartner` reads exactly that answer, so every 100-tick restore pass decides "this cart is gone".
+
+Changes:
+
+- `protectCartLinks` defaults to **true** again (code, config comment and README updated), with the evidence recorded in the comment.
+- No other behaviour changes; the 1.5.0 removals and the rest of its defaults stand.
+
+**Probe measurement** (same session, 600-tick windows, three steady windows):
+
+| Counter | Calls/window | Total | Normalised |
+|---|---|---|---|
+| `cart.readyChunks` | 575,000 | 130 ms | **958/tick, 0.22 ms/tick** |
+| `cart.reconcile` | 5,424 | 115 ms | 9/tick, 0.20 ms/tick |
+| `cart.membershipScan` | 2,325 | 2.2 ms | 3.7 µs/tick |
+| `cart.reclassify` | 9 | ~0 | almost never re-classified — the cause of the bug above |
+| `rivet.reconcileLive` | 2,400 | 34.5 ms | 4/tick, 58 µs/tick |
+| `rivet.rivetsAndDirty` | 2,400 | 6.8 ms | 4/tick, 11 µs/tick |
+| `plot.scanBearingCells` | 1,599 | 47.0 ms | 2.7/tick, 78 µs/tick (**mostly the guard's re-scan**) |
+| `alloc` | — | — | ~210 MB/s on the server thread |
+| Sum | — | — | **~560 µs/tick** |
+
+Conclusion: the 0.1.6 membership pass costs about **0.2 ms/tick**, and almost all of it is `readyPlotChunkCount` (once per live sub-level per tick, ≈958 calls). That is the only **confirmed** new hot spot — about 0.4% of the tick budget, with no safe local fix (the count *is* the "has the plot been populated yet" detection, so it belongs upstream). The guard's re-scans cost ~78 µs/tick, and that cost exists because of upstream's wrong negative cache, not by our choice.
+
+Raw log (1.3 MB, every probe window plus 652 guard lines): `work/client-probe-20261117.log`.
+
 ## 1.5.0 — 2026-11-17
 
 **Port to simulatedcoasters 0.1.6: three mixins that lost their target are gone, and the build now ships hotspot probes (on by default)**

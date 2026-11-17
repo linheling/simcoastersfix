@@ -33,18 +33,27 @@
 | 2 | `BalloonTetherController.maybeRestoreTethers` 节流 | 该类字节未变，`last != gameTime` 的写法错误原样保留：每物理 tick 遍历全部 sublevel |
 | 3 | 气球 tick 内查询/物理管线去重 | 同上；`findBalloonById` ×2、`balloonBlockEntity` ×2、`resolveHostSubLevel` ×2、7 处管线测速 |
 | 4 | 连杆 tick 内 `findCartById` 去重 | `tick` 内偏移 74 / 84 仍是两次解析 |
+| 5 | 删除前重新裁决（1.4.1 的 guard） | 0.1.6 的成员索引仍会把「plot 没填充完时归类过」的 sublevel **永久**缓存成「不是车」，实测 10,240 次误判、78 节车厢（1.5.1） |
 
 配置全部可以单独关掉，关掉即回到上游行为。
 
-## 热点探针（1.5.0 新增，默认开启）
+## 热点探针（1.5.0 新增，默认开启；1.5.1 首次实测）
 
 0.1.6 把「每 tick 全量扫」换成了事件索引，剩下的成本换了个形状：**每 tick 一次 O(sublevel) 的
 遍历**，单次很便宜，采样到的 self-time 里几乎看不见。这类成本只能靠计数与计时证实或证伪，
-所以 1.5.0 自带探针：
+所以 1.5.0 自带探针。真实存档（≈958 个存活 sublevel）跑出来的稳态：
 
 ```
-[simcoastersfix] probes[600t]: cart.reconcile 3618x 4.54ms 1.25us/call | rivet.reconcileLive 1800x 1.61ms 0.89us/call | rivet.rivetsAndDirty 1800x 0.46ms 0.25us/call | alloc 0.43MB/s || total 11.01us/tick
+probes[600t]: cart.readyChunks 574851x 135.49ms 0.24us/call | cart.reconcile 5424x 119.18ms 21.97us/call
+            | cart.membershipScan 2325x 2.23ms 0.96us/call | cart.reclassify 9x
+            | rivet.reconcileLive 2400x 38.13ms 15.89us/call | rivet.rivetsAndDirty 2400x 7.23ms 3.01us/call
+            | plot.scanBearingCells 1599x 48.11ms 30.09us/call | alloc 209.01MB/s || total 583.95us/tick
 ```
+
+结论：成员索引这一整趟 ≈ **0.2 ms/tick**，而且几乎全花在 `readyPlotChunkCount`（958 次/tick）——
+**这是唯一被证实的 0.1.6 新增热点**，约占 tick 预算 0.4%；没有安全的局部修法（那个计数就是
+「plot 何时填充完」的检测手段，属上游的活）。`plot.scanBearingCells` 的 78 µs/tick 大部分是
+守卫在纠正上游那个错误的负缓存。
 
 | 计数项 | 对应 0.1.6 的哪一段 | 看点 |
 |---|---|---|
@@ -81,7 +90,7 @@ balloonTickMemo                  = true  # 气球 tick 内重复查询去重
 balloonPhysicsMemo               = true  # 物理管线速度读取去重
 trainLinkTickMemo                = true  # 连杆 tick 内重复查询去重
 curveHandleLengthCache           = true  # 贝塞尔手柄长度缓存
-protectCartLinks                 = false # TTL=1 时无需兜底；把 TTL 调大再打开
+protectCartLinks                 = true  # 删除前重新裁决（0.1.6 仍会缓存错误的「不是车」）
 hotspotProbes                    = true  # 热点探针
 hotspotProbeIntervalTicks        = 600   # 探针窗口（600 = 30 秒）
 ```
@@ -136,9 +145,11 @@ gradlew.bat runServer      # 本地 dev 验证（run/mods 需放 create + sable 
 
 - **只支持 0.1.6**：`neoforge.mods.toml` 钉的是 `[0.1.6,0.1.7)`。0.1.6 自己就搬走了三个 1.4.1
   依赖的注入点，把版本范围放开等于让用户去踩同一个坑。
-- **连杆被删掉不可恢复**：1.4.1 的 guard 还在，但 1.5.0 默认关（`protectCartLinks=false`）——
-  因为 `bearingScanTtl*=1` 时没有滞后可言，0.1.6 的成员索引也已经拒绝把「plot 没填充」读成
-  「车没了」。**调大 TTL 的人请把它打开。**
+- **连杆被删掉不可恢复，而 0.1.6 仍会误判**：`protectCartLinks` 默认开。实测（2026-11-17，真实存档）
+  一个 30 秒窗口里守卫拒绝了 **10,240 次**拆卸、涉及 **78 节车厢**，上游 `unlinked` 0 次——
+  关掉它，这 78 条耦合会在载入时被删进 NBT。根因是 0.1.6 的成员索引会把「plot 还没填充完时
+  归类过的 sublevel」永久缓存成「不是车」，而唯一的重判条件是 `readyChunkCount`，chunk 对象
+  早在、内容晚到时它不会变。证据与数字见 [`CHANGELOG.md`](CHANGELOG.md) 1.5.1。
 - `pruneInvalidLinksForCoupling`（玩家主动连车那条支路）仍未加 guard。
 - 探针数字是**观察**，不是结论：先看 `cart.readyChunks` 与 `cart.membershipScan`，再决定要不要
   为它们写补丁。判断口径同 [`OPTIMIZATION.md`](OPTIMIZATION.md) §14：读代码得到的因果必须用采样验一次。
