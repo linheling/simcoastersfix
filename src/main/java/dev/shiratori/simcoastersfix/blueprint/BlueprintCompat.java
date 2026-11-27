@@ -10,8 +10,9 @@ import dev.silvergold.simulatedcoasters.SimulatedCoastersBlocks;
  *
  * <p>Everything in this package touches {@code sable_schematic_api} classes, so this class is only
  * ever loaded when that mod is present (see {@code Simcoastersfix#commonSetup}). It registers two
- * block mappers (rivet and balloon host references), the save/place event hook (cart train couplings)
- * and the block cost rules that make the film printer charge for Coasters blocks.
+ * block mappers (rivet and balloon host references), the save/place event hook (cart train couplings
+ * and the post-place verification), and the block cost rules that make the film printer charge for
+ * Coasters blocks.
  */
 public final class BlueprintCompat {
     private static boolean registered;

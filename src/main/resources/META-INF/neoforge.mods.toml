@@ -50,3 +50,8 @@ versionRange="[1.0.0,)"
 type="optional"
 ordering="AFTER"
 side="BOTH"
+# Repairs blueprint blocks that a place records but never writes, at the phase boundary right before
+# the block entity pass runs (see BlueprintPlaceRepair). Optional on purpose: if Photomancy renames
+# that call the mixin does nothing and the place event's late repair still restores block states.
+[[mixins]]
+config = "simcoastersfix.repair.mixins.json"

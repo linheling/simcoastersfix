@@ -10,6 +10,7 @@ import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
 import dev.ryanhcode.sable.sublevel.SubLevel;
 import dev.shiratori.simcoastersfix.Simcoastersfix;
+
 import dev.silvergold.simulatedcoasters.balloon.BalloonLoadReconciler;
 import dev.silvergold.simulatedcoasters.balloon.BalloonResolve;
 import dev.silvergold.simulatedcoasters.rivet.RivetBlockEntity;
@@ -114,6 +115,11 @@ final class CoasterBlueprintEvent implements SableBlueprintEvent {
 
     @Override
     public void onPlaceAfterBlocks(BlueprintPlaceSession session, CompoundTag data) {
+        // Normally a no-op: BlueprintPlaceRepair already ran at the LOAD_BLOCK_ENTITIES phase
+        // boundary, where Photomancy's block entity pass can still attach the blueprint's NBT.
+        // This covers a session that never reached that phase.
+        BlueprintPlaceRepair.afterPlace(session);
+
         ServerLevel level = session.level();
         Map<UUID, UUID> uuidMap = session.subLevelUuidMap();
         int restoredLinks = 0;

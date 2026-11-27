@@ -2,6 +2,108 @@
 
 > English release notes (for the CurseForge / Modrinth changelog field): [`CHANGELOG.en.md`](CHANGELOG.en.md)
 
+## 2.2.1 — 2026-11-27
+
+**修复：蓝图放置会静默丢方块（日志只报三分之二），并在放置过程中自动修补**
+
+### 现象
+
+放置一份 1887 方块的蓝图（`RA-12 DarkMatter`），船体上少一整块隔舱，日志里是 133 条：
+
+```
+[Server thread/WARN] [net.minecraft.world.level.chunk.LevelChunk/]:
+Trying to set block entity … at position BlockPos{x=20481024, y=124, z=20485120},
+but state Block{minecraft:air} does not allow it
+```
+
+把放出来的子层级导出、和原蓝图逐格 diff（`tools/blueprint_diff.py`）：
+
+```
+原蓝图   1887 方块 / 1278 方块实体 / 206 调色板项 / 0 个 air
+放出来   1686 方块 / 1145 方块实体
+缺失 201、多出 0、类型变化 0
+  ├─ 133 格带方块实体  ← 就是日志里那 133 条
+  └─  68 格普通方块    ← 一条日志都没有（67 × create:black_sail、1 × minecraft:black_concrete）
+```
+
+**日志只报出实际损失的三分之二。** 无方块实体的方块被丢了，不会有任何记录。
+
+丢失的是 `x 8..15 / y 0..5 / z 18..33` 一个连通体积。把同一份文件放到不同 plot 区（plot z 差 4096），丢的**本地坐标完全一样** —— 跟内容走，不跟落点走。
+
+### 原因
+
+`SableBlueprintPlacer.place` 对每个方块做两件事，字节码里是紧邻的两条无条件指令：
+
+```
+377: invokevirtual  net/minecraft/world/level/chunk/LevelChunk.setBlockState(BlockPos, BlockState, Z)
+410: invokevirtual  dev/rew1nd/sableschematicapi/api/blueprint/BlueprintPlaceSession.recordPlacedBlock(...)
+```
+
+中间没有分支，也**不检查返回值**。而对被丢的那些坐标，`level.getChunk(...)` 给回来的不是 plot 的区块，是一个占位区块：
+
+```
+recorded=1887  didNotStickAtRecord=201  enteredSetBlockState=1692  writes=1692  wrongChunk=0
+atRecord=minecraft:void_air   expected=create:copycat_panel
+  | minY=-64 height=384 outside=false
+  | chunk=EmptyLevelChunk@[0, 0]   sectionIndex=11 sections=24
+```
+
+链条是这样：
+
+1. `ensureChunk()` 看到 `plot.getChunkHolder(localChunk) != null` 就不创建区块 —— plot 认为这个区块归自己；
+2. 紧接着 `level.getChunk(x, z)` 拿到的却是 `EmptyLevelChunk`（占位，区块坐标 `[0, 0]`）—— level 的视图和 plot 的视图不一致；
+3. `EmptyLevelChunk#setBlockState` 直接 `return null`，**一个方块都没写**；
+4. 放置器不检查返回值，照旧 `recordPlacedBlock`；
+5. 建方块实体阶段在这些空格子上挂 BE → 那 133 条 warning；剩下 68 个无实体方块连日志都没有。
+
+读同一坐标得到 `void_air`（不是 `air`）正是占位区块的特征 —— 原版只在"位置不存在"时才这么答。
+
+### 修法：把修补挪到方块实体阶段之前
+
+在 `PLACE_BLOCK_STATES → LOAD_BLOCK_ENTITIES` 这个相位边界补，而不是等放置结束：
+
+```
+PLACE_BLOCK_STATES    方块状态全部写完
+      ↓  ★ 这里补（本 mod 的 setPhase 钩子）
+LOAD_BLOCK_ENTITIES   Photomancy 开始建 BE、装 NBT
+```
+
+补的时候**绕开 level 的区块视图**，改走 plot 自己的通道：
+
+```java
+BlockPos localPos = storagePos.subtract(subLevel.getPlot().getCenterBlock());
+subLevel.getPlot().getEmbeddedLevelAccessor().setBlock(localPos, expected, 2);
+```
+
+因为修补发生在 BE 阶段之前，**接下来 Photomancy 会照原流程处理这些格子** —— 用的是蓝图里自己的方块实体 NBT，也会走 `SableBlueprintMapperRegistry` 的 mapper（铆钉 / 气球 / 连杆那套）。本 mod 一行 NBT 代码都不碰。
+
+- `flags = 2` 只发客户端；邻居更新交给 Photomancy 自己的 `notifyPlacedBlocks`（它对整个 placed 列表跑一遍，与放置器原先 `setBlockState(..., false)` 的语义一致）。
+- 修补点早于 `finalizePlacement`（`updateBoundingBox` + 传送），所以补上的方块进包围盒与质量，不是事后贴上去的孤块。
+- 日志只在真的缺东西时打一行：
+
+```
+[simcoastersfix] blueprint place repair: recorded=1887 missing=201 repaired=201 skipped=0 (block entity data still restored by Photomancy)
+```
+
+### 2.2.0 的弯路（未发布）
+
+第一版是在 `onPlaceAfterBlocks`（放置结束后）补的：方块能补回来，但**方块实体 NBT 补不回来** —— NBT 在蓝图对象里，`BlueprintPlaceSession` 不暴露它，而放置器的 BE 阶段已经跑过了。结果是那 133 格拿到默认 BE（copycat 没材质、传送带是初始状态），日志里多一项 `blockEntitiesNotRestored=133`。
+
+所以 2.2.1 把修补前移到了相位边界。现在那条 late 分支只作为兜底保留：**它一旦出现在日志里，就说明相位钩子没挂上**（`setPhase` 改名或被别的 mixin 挡了），此时退化到 2.2.0 的行为，不会崩。
+
+### 兼容性与风险
+
+- 新增 **1 个 mixin**（`BlueprintPlacePhaseRepairMixin`，注入 `BlueprintPlaceSession#setPhase` 的 HEAD）。这是 2.0.0"零 mixin"之后唯一的 mixin，独立可选配置 `simcoastersfix.repair.mixins.json` + `require = 0` + `remap = false`：Photomancy 改名字时静默失效，不会把游戏带崩。
+- 只在 `phase == LOAD_BLOCK_ENTITIES` 时触发；同一线程有重入保护。
+- 验证过的环境：MC 1.21.1 / NeoForge 21.1.x、Sable 2.0.6、Photomancy 1.0.1、Drydock 4.288、Create: Coasters Simulated 0.1.6。
+
+### 未修 / 待办
+
+- **上游那个 plot/level 区块视图不一致本身没有修**，本 mod 只是绕过它。报告（含 201 格坐标、`EmptyLevelChunk` 证据、复现脚本）已整理：`reports/photomancy-place-placeholder-chunk.md`。
+- `repaired` 明显小于 `missing` 时说明还有别的成因，请把那一行日志发到 issue。
+
+**下次怎么办**：看到 `setBlockEntity` 说"这里是空气"，先别信日志的条数 —— 它只覆盖带方块实体的方块；要真数损失，得导出后逐格 diff。以及：**判断"写入有没有发生"不能只看自己的钩子计数**，得去读世界状态（`void_air` 和 `air` 的差别就是这次的突破口）。
+
 ## 2.1.0 — 2026-11-17
 
 **修复：蓝图打印把 Coasters 的方块当成免费的（材料清单里只有草方块这类原版方块）**

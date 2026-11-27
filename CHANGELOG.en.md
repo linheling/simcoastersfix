@@ -1,5 +1,108 @@
 # Changelog
 
+## 2.2.1 — 2026-11-27
+
+**Fixed: placing a blueprint silently dropped blocks (the log reported only two thirds of them), and the place now repairs itself mid-flight**
+
+### Symptom
+
+Placing an 1887-block blueprint (`RA-12 DarkMatter`) leaves a whole compartment missing, and the log carries 133 lines of:
+
+```
+[Server thread/WARN] [net.minecraft.world.level.chunk.LevelChunk/]:
+Trying to set block entity … at position BlockPos{x=20481024, y=124, z=20485120},
+but state Block{minecraft:air} does not allow it
+```
+
+Exporting the placed sub-level and diffing it cell by cell against the blueprint (`tools/blueprint_diff.py`):
+
+```
+blueprint  1887 blocks / 1278 block entities / 206 palette entries / 0 air entries
+placed     1686 blocks / 1145 block entities
+missing 201, extra 0, changed type 0
+  ├─ 133 cells owned a block entity   ← the 133 log lines
+  └─  68 cells were plain blocks      ← not a single log line
+        (67 × create:black_sail, 1 × minecraft:black_concrete)
+```
+
+**The log reports only two thirds of the damage.** A block without a block entity leaves no record when it is dropped.
+
+The lost cells form one connected volume, `x 8..15, y 0..5, z 18..33`. Placing the same file into a different plot allocation (plot z differs by 4096) loses the **same local cells** — the loss follows the content, not the destination.
+
+### Cause
+
+For every block, `SableBlueprintPlacer.place` does two things, and in the bytecode they are two adjacent unconditional instructions:
+
+```
+377: invokevirtual  net/minecraft/world/level/chunk/LevelChunk.setBlockState(BlockPos, BlockState, Z)
+410: invokevirtual  dev/rew1nd/sableschematicapi/api/blueprint/BlueprintPlaceSession.recordPlacedBlock(...)
+```
+
+Nothing branches in between, and **the return value is not checked**. For the cells that go missing, `level.getChunk(...)` does not hand back the plot's chunk but a placeholder:
+
+```
+recorded=1887  didNotStickAtRecord=201  enteredSetBlockState=1692  writes=1692  wrongChunk=0
+atRecord=minecraft:void_air   expected=create:copycat_panel
+  | minY=-64 height=384 outside=false
+  | chunk=EmptyLevelChunk@[0, 0]   sectionIndex=11 sections=24
+```
+
+The chain:
+
+1. `ensureChunk()` sees `plot.getChunkHolder(localChunk) != null` and creates nothing — the plot believes it owns the chunk;
+2. the very next `level.getChunk(x, z)` returns `EmptyLevelChunk` (chunk position `[0, 0]`) — the level's view and the plot's view disagree;
+3. `EmptyLevelChunk#setBlockState` simply `return null` and **writes nothing**;
+4. the placer ignores the return value and calls `recordPlacedBlock` anyway;
+5. the block entity pass attaches a block entity to an empty cell — the 133 warnings; the 68 plain blocks leave no trace at all.
+
+Reading that same position answers `void_air` rather than `air`, which is exactly the placeholder's signature: vanilla only answers that for a position that does not exist.
+
+### Fix: repair before the block entity pass instead of after the place
+
+The repair runs at the `PLACE_BLOCK_STATES → LOAD_BLOCK_ENTITIES` phase boundary:
+
+```
+PLACE_BLOCK_STATES    every block state written
+      ↓  ★ repair here (this mod's setPhase hook)
+LOAD_BLOCK_ENTITIES   Photomancy starts creating block entities and loading their NBT
+```
+
+The repair bypasses the level's chunk view entirely and writes through the plot:
+
+```java
+BlockPos localPos = storagePos.subtract(subLevel.getPlot().getCenterBlock());
+subLevel.getPlot().getEmbeddedLevelAccessor().setBlock(localPos, expected, 2);
+```
+
+Because it runs before the block entity pass, **Photomancy then handles those cells itself** — with the blueprint's own block entity NBT and through the `SableBlueprintMapperRegistry` mappers (rivet hosts, balloon hosts, cart links). This mod touches no NBT at all.
+
+- `flags = 2` only sends to clients; neighbour updates stay Photomancy's business through `notifyPlacedBlocks`, which walks the whole placed list — matching the placer's original `setBlockState(..., false)` semantics.
+- The repair point sits before `finalizePlacement` (`updateBoundingBox` + teleport), so repaired blocks join the plot bounds and mass instead of being pasted on afterwards.
+- One log line, only when something was actually missing:
+
+```
+[simcoastersfix] blueprint place repair: recorded=1887 missing=201 repaired=201 skipped=0 (block entity data still restored by Photomancy)
+```
+
+### The 2.2.0 detour (never released)
+
+The first build repaired at `onPlaceAfterBlocks`, i.e. after the place finished: block states came back, but **block entity NBT could not** — that NBT lives in the blueprint object, which `BlueprintPlaceSession` does not expose, and the placer's block entity pass had already run. Those 133 cells ended up with a default block entity (copycats without a material, belts in their initial state) plus a `blockEntitiesNotRestored=133` counter in the log.
+
+2.2.1 therefore moved the repair to the phase boundary. The late branch is kept only as a fallback: **if it ever appears in the log, the phase hook did not apply** (`setPhase` renamed or blocked by another mixin). Behaviour then degrades to 2.2.0 without crashing.
+
+### Compatibility and risk
+
+- Adds **one mixin** (`BlueprintPlacePhaseRepairMixin`, injected at the HEAD of `BlueprintPlaceSession#setPhase`). It is the only mixin since 2.0.0 went mixin-free, in its own optional config `simcoastersfix.repair.mixins.json` with `require = 0` and `remap = false`: if Photomancy renames the call it fails silently instead of crashing.
+- Fires only for `phase == LOAD_BLOCK_ENTITIES`, with a re-entrancy guard for the same thread.
+- Verified on MC 1.21.1 / NeoForge 21.1.x, Sable 2.0.6, Photomancy 1.0.1, Drydock 4.288, Create: Coasters Simulated 0.1.6.
+
+### Not fixed / open
+
+- **The underlying plot/level chunk-view mismatch is upstream's** and is only bypassed here. The report (201 cells, the `EmptyLevelChunk` evidence, reproduction scripts) is in `reports/photomancy-place-placeholder-chunk.md`.
+- If `repaired` comes out clearly below `missing`, another cause is at play — please put that log line in an issue.
+
+**Next time**: when `setBlockEntity` says "this is air", do not trust the line count — it only covers blocks that own a block entity. To count the real damage, export and diff cell by cell. And: **you cannot judge whether a write happened from your own hook counters alone** — read the world state (`void_air` vs `air` was the breakthrough here).
+
 ## 2.1.0 — 2026-11-17
 
 **Fixed: the film printer treated Coasters blocks as free (the material list only showed vanilla blocks)**
