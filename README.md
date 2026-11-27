@@ -117,4 +117,4 @@ gradlew.bat runServer      # 本地 dev 验证
 | Sable Photomancy（Rew1nd） | MIT | 只调用其公开扩展点，**不包含也不分发**其代码 |
 | Create（simibubi） | 代码 MIT / `assets/` All Rights Reserved | 不包含任何代码或资产 |
 
-上传 CurseForge 时请把项目协议设为 **MIT**。
+
